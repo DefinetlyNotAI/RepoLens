@@ -194,6 +194,8 @@ def analyze_file(path, data, overrides=None):
         if node.is_named and node.named_children and node.type in FUNCTIONS | CLASSES:
             kind = "function" if node.type in FUNCTIONS else "class"
             name = symbol_name(node, data)
+            if kind == "function" and name.startswith("<anonymous@"):
+                continue
             parent = node.parent
             owner = None
             while parent:
@@ -204,7 +206,7 @@ def analyze_file(path, data, overrides=None):
             qualified = f"{owner['name']}.{name}" if owner else name
             body = field(node, "body")
             declaration_end = body.start_byte if body else node.end_byte
-            signature = " ".join(data[node.start_byte:declaration_end].decode("utf-8", "replace").split())[:500]
+            signature = " ".join(data[node.start_byte:declaration_end].decode("utf-8", "replace").split())
             symbol = {"id": f"{path}:{node.start_point.row + 1}:{node.start_point.column + 1}",
                       "name": qualified, "short_name": name, "kind": kind, "path": path,
                       "signature": signature,
@@ -254,11 +256,12 @@ def analyze_file(path, data, overrides=None):
     return result
 
 
-def highlight_lines(path, data, start=1, count=100):
+def highlight_lines(path, data, start=1, count=None):
     lines = data.decode("utf-8", "replace").splitlines()
     byte_lines = data.splitlines()
+    stop = len(lines) if count is None else start - 1 + count
     preview = [{"number": i + 1, "text": line, "spans": []} for i, line in enumerate(lines)
-               if start - 1 <= i < start - 1 + count]
+               if start - 1 <= i < stop]
     by_line = {line["number"] - 1: line for line in preview}
     language = LANGUAGES.get(PurePosixPath(path).suffix.lower())
     if not language:
@@ -276,7 +279,7 @@ def highlight_lines(path, data, start=1, count=100):
     string_nodes = {"string", "string_literal", "raw_string_literal", "interpreted_string_literal", "char_literal", "character_literal", "quoted_value", "string_value", "string_content", "string_fragment", "regex", "regex_pattern"}
     while stack:
         node = stack.pop()
-        if node.end_point.row < start - 1 or node.start_point.row >= start - 1 + count:
+        if node.end_point.row < start - 1 or node.start_point.row >= stop:
             continue
         kind = None
         parent = node.parent
@@ -346,7 +349,7 @@ def highlight_lines(path, data, start=1, count=100):
             unit = next((child for child in node.named_children if child.type == "unit"), None) if node.type in {"integer_value", "float_value"} else None
             if unit:
                 stack.append(unit)
-            for row in range(max(node.start_point.row, start - 1), min(node.end_point.row + 1, start - 1 + count)):
+            for row in range(max(node.start_point.row, start - 1), min(node.end_point.row + 1, stop)):
                 if row not in by_line or row >= len(byte_lines):
                     continue
                 first = node.start_point.column if row == node.start_point.row else 0

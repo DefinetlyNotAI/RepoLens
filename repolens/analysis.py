@@ -415,7 +415,7 @@ def build_report(root, revision, files, dependencies, diagnostics, history_limit
                             "Complexity counts grammar branch nodes and logical operators; cognitive scores are structural approximations.",
                             "Duplication normalizes identifier and literal tokens; similarity candidates are bounded to 20 per function and 100 per shingle.",
                             "Cohesion measures resolved internal calls, not semantic cohesion. Unreachable findings cover only sequential statements after unconditional exits.",
-                            "Generated directories, binary files, symlinks and files over 2 MiB are excluded."],
+                            "Generated directories, binary files and symlinks are excluded; text files have no size cutoff."],
             "analysis_stats": {"unresolved_calls": unresolved_calls, "similarity_comparisons": comparisons}}
 
 

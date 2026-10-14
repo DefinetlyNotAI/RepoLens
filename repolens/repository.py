@@ -5,7 +5,6 @@ from pathlib import Path, PurePosixPath
 
 EXCLUDED = {".git", ".venv", "venv", "node_modules", "__pycache__", ".next", "dist", "build",
             "target", "vendor", ".repolens", ".idea", ".vscode", "coverage", "graphify-out"}
-MAX_BYTES = 2 * 1024 * 1024
 
 
 def git(root, *args, binary=False):
@@ -70,9 +69,6 @@ def discover(root, revision=None, includes=()):
             try:
                 if batch:
                     object_id, size = blobs[name]
-                    if size > MAX_BYTES:
-                        diagnostics.append(f"Skipped oversized file: {name}")
-                        continue
                     batch.stdin.write(object_id + b"\n")
                     batch.stdin.flush()
                     header = batch.stdout.readline().split()
@@ -85,9 +81,6 @@ def discover(root, revision=None, includes=()):
                     if path.is_symlink() or not path.is_file():
                         continue
                     if not path.resolve().is_relative_to(root):
-                        continue
-                    if path.stat().st_size > MAX_BYTES:
-                        diagnostics.append(f"Skipped oversized file: {name}")
                         continue
                     data = path.read_bytes()
                 if b"\0" in data[:8192]:
@@ -153,17 +146,16 @@ def history(root, limit=100, revision=None, offset=0):
             "diagnostics": ["Churn covers the selected commit window; rename-only paths are omitted."]}
 
 
-def source(root, path, revision=None, start=1, count=40, highlight=False):
+def source(root, path, revision=None, start=1, count=None, highlight=False):
     root = Path(root).resolve()
     target = (root / path).resolve()
     if not target.is_relative_to(root):
         raise ValueError("Source path must stay inside the repository")
     relative = target.relative_to(root).as_posix()
     data = git(root, "show", f"{resolve_revision(root, revision)}:{git_prefix(root)}{relative}", binary=True) if revision else target.read_bytes()
-    if len(data) > MAX_BYTES:
-        raise ValueError("Source exceeds the 2 MiB preview limit")
     if highlight:
         from .parser import highlight_lines
         return highlight_lines(relative, data, start, count)
     lines = data.decode("utf-8", "replace").splitlines()
-    return "\n".join(f"{i + 1:5}  {line}" for i, line in enumerate(lines) if start - 1 <= i < start - 1 + count)
+    stop = len(lines) if count is None else start - 1 + count
+    return "\n".join(f"{i + 1:5}  {line}" for i, line in enumerate(lines) if start - 1 <= i < stop)

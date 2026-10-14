@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { basename, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inputDialog } from "./input-dialog.js";
-import { sunburst } from "./sunburst.js";
+import { sizeTree } from "./size-tree.js";
 
 type Metrics = Record<string, number | string | null>;
 interface SymbolInfo {
@@ -35,8 +35,8 @@ interface Comparison {
   changed_files: { path: string; complexity_delta: number; lines_delta: number }[];
   added_edges: [string, string][]; removed_edges: [string, string][];
 }
-type Row = { label: string; file?: FileInfo; symbol?: SymbolInfo; finding?: Finding; commit?: Commit; directory?: string; section?: string; depth?: number; branch?: boolean; hit?: { line: number; text: string } };
-type Section = { name: string; text: string; source?: { path: string; line: number } };
+type Row = { label: string; file?: FileInfo; symbol?: SymbolInfo; finding?: Finding; commit?: Commit; directory?: string; section?: string; depth?: number; branch?: boolean; hit?: { line: number; text: string }; group?: { key: string; name: string; findings: Finding[] }; sizeLines?: number; symbolCount?: number };
+type Section = { name: string; text: string; source?: { path: string; line: number }; verbatim?: string[] };
 type Mouse = Omit<blessed.Widgets.Events.IMouseEventArg, "action"> & {
   action: string; button?: string; type?: string; raw?: [number, ...unknown[]]; shift?: boolean; ctrl?: boolean;
 };
@@ -62,7 +62,7 @@ const detailFrame = blessed.box({ parent: screen, top: 3, bottom: 2, left: "42%"
 const itemHeader = blessed.box({ parent: detailFrame, top: 0, left: 1, right: 1, height: 2, wrap: false });
 const sectionBar = blessed.box({ parent: detailFrame, top: 2, left: 1, right: 1, height: 1 });
 const detail = blessed.box({ parent: detailFrame, top: 4, bottom: 1, left: 0, right: 0, wrap: false,
-  scrollable: true, alwaysScroll: true, keys: false, vi: false, mouse: true,
+  keys: false, vi: false, mouse: true,
   padding: { left: 1, right: 1 }, style: { fg: "white", scrollbar: { fg: "gray" } } });
 const gutter = blessed.box({ parent: detailFrame, top: 4, bottom: 1, left: 1, width: 6, wrap: false, style: { fg: "gray" }, hidden: true });
 const detailBar = blessed.box({ parent: detailFrame, bottom: 0, left: 1, right: 1, height: 1, mouse: true, style: { fg: "gray" } });
@@ -74,8 +74,8 @@ const listItems = list as typeof list & { items: blessed.Widgets.BoxElement[]; e
 const footer = blessed.box({ parent: screen, bottom: 0, left: 1, right: 1, height: 2, wrap: false, style: { fg: "gray" } });
 const dialog = inputDialog(screen, readClipboard, clipboard);
 const prompt = dialog.box;
-const chart = sunburst(detailFrame, basename(root), (path, lines, files) => {
-  itemHeader.setContent(`${accent(clean(path))}\n${gray(`${lines.toLocaleString()} lines · ${files} files · hover segments, click to explore`)}`);
+const chart = sizeTree(detailFrame, basename(root), (path, lines, files) => {
+  itemHeader.setContent(`${accent(clean(path))}\n${gray(`${lines.toLocaleString()} lines · ${files} files · click to inspect`)}`);
 }, (path, directory) => {
   if (directory) { chart.setPath(path); rebuild(); chart.box.focus(); }
   else { view = 1; query = path; rebuild(); detail.focus(); }
@@ -92,6 +92,7 @@ let sorted = false;
 let busy = false;
 let status = "Starting analysis…";
 let listBase = 0, listExtent = 0, detailExtent = 0;
+let detailBase = 0;
 let historyLoading = false, historyDone = false, historyHead: string | undefined;
 let rgAvailable = false, searchVersion = 0;
 let sourceHits = new Map<string, { line: number; text: string }[]>();
@@ -99,6 +100,9 @@ let fileMap = new Map<string, FileInfo>();
 let symbolChildren = new Map<string, SymbolInfo[]>();
 let pathPattern: RegExp | undefined;
 const symbolExpanded = new Set<string>();
+const issueExpanded = new Set<string>();
+const closedFolders = new Set<string>();
+let verbatim = new Set<string>();
 let generation = 0;
 const expanded = new Set<string>(["."]);
 const children = new Set<ChildProcess>();
@@ -125,7 +129,7 @@ let dragging = false;
 let lastClick = { row: -1, time: 0 };
 let logicalLines: string[] = [];
 let styledLines: string[] = [];
-let visualRows: { logical: number; start: number; text: string; banner?: boolean }[] = [];
+let visualRows: { logical: number; start: number; text: string; banner?: boolean; severity?: string }[] = [];
 let detailLinks: { row: number; start: number; end: number; path: string }[] = [];
 let hoverLink: { row: number; start: number; end: number; path: string } | undefined;
 let sourceNotes = new Map<number, { severity: string; message: string }[]>();
@@ -191,11 +195,8 @@ function run<T>(command: string, args: string[] = [], selectedRevision = revisio
     if (command === "source") previewChild = child;
     let output = "";
     let errors = "";
-    let size = 0;
     child.stdout.on("data", (data: Buffer) => {
-      size += data.length;
-      if (size > 128 * 1024 * 1024) { child.kill(); reject(new Error("Report exceeded 128 MiB")); }
-      else output += data.toString();
+      output += data.toString();
     });
     child.stderr.on("data", (data: Buffer) => {
       errors = (errors + data.toString()).slice(-16384);
@@ -239,7 +240,7 @@ function overview(index = 0): string {
   const summary = report.summary;
   if (index === 1) return Object.entries(summary.languages as Record<string, number>).sort((a, b) => b[1] - a[1])
     .map(([language, count]) => `${color(language.padEnd(18), "6897bb")} ${accent(String(count).padStart(6))} ${gray("files")}`).join("\n");
-  const ranking = [...report.files].sort((a, b) => Number(b.metrics.hotspot) - Number(a.metrics.hotspot)).slice(0, 10);
+  const ranking = [...report.files].sort((a, b) => Number(b.metrics.hotspot) - Number(a.metrics.hotspot));
   if (index === 2) return ranking.filter(f => Number(f.metrics.hotspot) > 0).map(f =>
     `${accent(f.metrics.hotspot)}  ${clean(f.path)}\n${gray(`    ${f.churn.commits} commits · complexity ${f.metrics.cyclomatic || 0}`)}`).join("\n\n") || "No churn hotspots in the selected history window.";
   if (index === 3) return report.dependencies.map(d => `${accent(d.name)} ${clean(d.version)}\n${gray(`${d.ecosystem} · ${d.path}`)}`).join("\n\n") || "No declared dependencies found.";
@@ -271,6 +272,14 @@ function comparisonText(): string {
     "", accent("CHANGED FILES"), ...current.changed_files.map(f => `${fileLink(f.path)}   ${gray("complexity")} ${delta(f.complexity_delta)} · ${gray("lines")} ${delta(f.lines_delta)}`),
     "", accent("ADDED DEPENDENCIES"), ...current.added_edges.map(e => e.map(reference).join(" → ")),
     "", warning("REMOVED DEPENDENCIES"), ...current.removed_edges.map(e => e.map(reference).join(" → "))].join("\n");
+}
+
+function folderOpen(key: string, opened: Set<string>, automatic = false): boolean {
+  return !closedFolders.has(key) && (opened.has(key.startsWith("dir:") ? key.slice(4) : key) || automatic);
+}
+function toggleFolder(key: string, opened: Set<string>, automatic = false): void {
+  if (folderOpen(key, opened, automatic)) { opened.delete(key); closedFolders.add(key); }
+  else { opened.add(key); closedFolders.delete(key); }
 }
 
 function rebuild(selectedDirectory?: string, preserveIndex?: number): void {
@@ -305,28 +314,57 @@ function rebuild(selectedDirectory?: string, preserveIndex?: number): void {
     }
   }
   if (view === 2) {
+    const eligible = new Map<FileInfo, Set<string>>();
     for (const file of report.files) {
       const included = new Set(file.symbols.filter(s => matches(`${s.name} ${s.path}`) && (!filter || s.kind === filter || s.confidence === filter)).map(s => s.id));
       if (query || filter) {
         const byId = new Map(file.symbols.map(s => [s.id, s]));
         for (const id of [...included]) { let owner = byId.get(id)?.parent; while (owner) { included.add(owner); owner = byId.get(owner)?.parent; } }
       }
+      if (included.size) eligible.set(file, included);
+    }
+    const directories = new Set<string>();
+    for (const file of eligible.keys()) {
+      const parts = file.path.split("/");
+      for (let i = 1; i < parts.length; i++) directories.add(parts.slice(0, i).join("/"));
+    }
+    const visible = (path: string) => path.split("/").slice(0, -1).every((_, i, parents) => folderOpen("dir:" + parents.slice(0, i + 1).join("/"), expanded, !!(query || filter)));
+    const entries = [...[...directories].filter(visible).map<Row>(directory => ({ label: directory, directory })),
+      ...[...eligible.keys()].filter(file => visible(file.path)).map<Row>(file => ({ label: file.path, file, branch: true, symbolCount: eligible.get(file)!.size }))]
+      .sort((a, b) => (a.directory || a.file!.path).localeCompare(b.directory || b.file!.path));
+    for (const entry of entries) {
+      items.push(entry);
+      if (!entry.file || !folderOpen("file:" + entry.file.path, symbolExpanded, !!(query || filter))) continue;
+      const file = entry.file, included = eligible.get(file)!;
       const order = (symbols: SymbolInfo[]) => sorted ? [...symbols].sort((a, b) => Number(b.metrics?.cyclomatic || 0) - Number(a.metrics?.cyclomatic || 0) || a.short_name.localeCompare(b.short_name)) : symbols;
       const visit = (symbol: SymbolInfo, depth: number) => {
         if (!included.has(symbol.id)) return;
         const children = (symbolChildren.get(symbol.id) || []).filter(s => included.has(s.id));
         items.push({ label: `${symbol.name} ${symbol.path}:${symbol.line}`, symbol, depth, branch: children.length > 0 });
-        if (symbolExpanded.has(symbol.id) || query || filter) order(children).forEach(child => visit(child, depth + 1));
+        if (folderOpen(symbol.id, symbolExpanded, !!(query || filter))) order(children).forEach(child => visit(child, depth + 1));
       };
-      order(file.symbols.filter(s => !s.parent)).forEach(s => visit(s, 0));
+      order(file.symbols.filter(s => !s.parent)).forEach(s => visit(s, file.path.split("/").length));
     }
   }
-  if (view === 3) items = report.findings.filter(f => matches(`${f.path} ${f.message}`) && (!filter || f.type === filter || f.severity === filter || f.confidence === filter))
-    .map(finding => ({ label: `${finding.severity === "warning" ? "!" : "·"} ${finding.path}:${finding.line} ${finding.message}`, finding }));
+  if (view === 3) {
+    const findings = report.findings.filter(f => matches(`${f.path} ${f.message}`) && (!filter || f.type === filter || f.severity === filter || f.confidence === filter));
+    const severities = [...new Set(findings.map(f => f.severity))].sort((a, b) => ["error", "warning", "info"].indexOf(a) - ["error", "warning", "info"].indexOf(b));
+    for (const severity of severities) {
+      const severityFindings = findings.filter(f => f.severity === severity);
+      const key = "issues:" + severity;
+      items.push({ label: severity, group: { key, name: severity === "warning" ? "Warnings" : severity === "error" ? "Errors" : "Information", findings: severityFindings }, branch: true, depth: 0 });
+      if (!folderOpen(key, issueExpanded, !!(query || filter))) continue;
+      for (const type of [...new Set(severityFindings.map(f => f.type))].sort()) {
+        const typeFindings = severityFindings.filter(f => f.type === type), typeKey = key + ":" + type;
+        items.push({ label: type, group: { key: typeKey, name: type.replace(/_/g, " "), findings: typeFindings }, branch: true, depth: 1 });
+        if (folderOpen(typeKey, issueExpanded, !!(query || filter))) items.push(...typeFindings.map<Row>(finding => ({ label: `${finding.path}:${finding.line} ${finding.message}`, finding, depth: 2 })));
+      }
+    }
+  }
   if (view === 4) items = report.history.commits.filter(c => matches(c.subject + c.revision)).map(commit => ({ label: `${commit.revision.slice(0, 8)} ${commit.date.slice(0, 10)} ${commit.subject}`, commit }));
-  if (view === 5) items = chart.children().map(node => ({ label: node.path, ...(node.children.length ? { directory: node.path } : { file: fileMap.get(node.path) }) }));
+  if (view === 5) items = chart.children().map(node => ({ label: node.path, sizeLines: node.lines, ...(node.children.length ? { directory: node.path } : { file: fileMap.get(node.path) }) }));
   if (view === 6) items = [{ label: comparison ? "Revision comparison" : "Press c to compare" }];
-  if (sorted && view !== 2 && view !== 5) items.sort((a, b) => Number(b.symbol?.metrics?.cyclomatic || b.file?.metrics.cyclomatic || 0) - Number(a.symbol?.metrics?.cyclomatic || a.file?.metrics.cyclomatic || 0) || a.label.localeCompare(b.label));
+  if (sorted && view !== 2 && view !== 3 && view !== 5) items.sort((a, b) => Number(b.symbol?.metrics?.cyclomatic || b.file?.metrics.cyclomatic || 0) - Number(a.symbol?.metrics?.cyclomatic || a.file?.metrics.cyclomatic || 0) || a.label.localeCompare(b.label));
   rows = items;
   renderedRows = rows.map(renderRow);
   listExtent = renderedRows.reduce((width, text) => Math.max(width, displayWidth(text)), 0);
@@ -359,15 +397,22 @@ function renderRow(row: Row): string {
     const remaining = Math.max(1, width - Number(detail.strWidth(strip(metadata))) - 1);
     return name + " ".repeat(Math.max(1, remaining - Number(detail.strWidth(strip(name))) + 1)) + metadata;
   };
-  if (row.symbol) return columns(`${"  ".repeat(row.depth || 0)}${row.branch ? accent(symbolExpanded.has(row.symbol.id) || query || filter ? "▾ " : "▸ ") : "  "}${color(row.symbol.kind === "class" ? "C" : "ƒ", row.symbol.kind === "class" ? "6897bb" : "ffc66d")} ${clean(row.symbol.short_name)}`, Number(row.symbol.metrics?.cyclomatic) >= 10 ? warning(row.symbol.metrics?.cyclomatic) : gray(row.symbol.metrics?.cyclomatic ?? "—"));
-  if (row.finding) return columns(`${row.finding.severity === "error" ? danger("!") : row.finding.severity === "warning" ? warning("!") : accent("·")} ${clean(basename(row.finding.path))}:${row.finding.line}`, gray(row.finding.type));
+  if (row.group) {
+    const severity = row.group.findings[0]?.severity;
+    const paint = severity === "error" ? danger : severity === "warning" ? warning : accent;
+    return columns(`${"  ".repeat(row.depth || 0)}${accent(folderOpen(row.group.key, issueExpanded, !!(query || filter)) ? "▾ " : "▸ ")}${paint(row.group.name)}`, gray(row.group.findings.length));
+  }
+  if (view === 2 && row.file) return columns(`${"  ".repeat(row.file.path.split("/").length - 1)}${accent(folderOpen("file:" + row.file.path, symbolExpanded, !!(query || filter)) ? "▾ " : "▸ ")}${fileLink(basename(row.file.path))}`, gray(`${row.symbolCount} symbols`));
+  if (row.symbol) return columns(`${"  ".repeat(row.depth || 0)}${row.branch ? accent(folderOpen(row.symbol.id, symbolExpanded, !!(query || filter)) ? "▾ " : "▸ ") : "  "}${color(row.symbol.kind === "class" ? "C" : "ƒ", row.symbol.kind === "class" ? "6897bb" : "ffc66d")} ${clean(row.symbol.short_name)}`, Number(row.symbol.metrics?.cyclomatic) >= 10 ? warning(row.symbol.metrics?.cyclomatic) : gray(row.symbol.metrics?.cyclomatic ?? "—"));
+  if (row.finding) return columns(`${"  ".repeat(row.depth || 0)}${row.finding.severity === "error" ? danger("!") : row.finding.severity === "warning" ? warning("!") : accent("·")} ${fileLink(row.finding.path)}:${accent(row.finding.line)}`, gray(row.finding.confidence));
   if (row.commit) return `${color("*", "6a8759")} ${color(row.commit.revision.slice(0, 7), "ffc66d")} ${gray(row.commit.date.slice(0, 10))} ${clean(row.commit.subject)}`;
   if (row.hit) return `${fileLink(row.file!.path)}:${accent(row.hit.line)} ${gray(row.hit.text.trim())}`;
+  if (view === 5) return columns(`${row.directory ? accent("● ") : color("· ", "6897bb")}${fileLink(basename(row.directory || row.file!.path))}`, color(row.sizeLines?.toLocaleString(), "6a8759"));
   if (row.file && (query || filter || sorted)) return fileLink(row.file.path);
   if (row.directory || row.file) {
     const path = row.directory || row.file!.path;
-    const indentation = " ".repeat(Math.min(2 * (path.split("/").length - 1), Math.floor(width / 3)));
-    const marker = row.directory ? expanded.has(path) ? "▾ " : "▸ " : "  ";
+    const indentation = "  ".repeat(path.split("/").length - 1);
+    const marker = row.directory ? folderOpen("dir:" + path, expanded, view === 2 && !!(query || filter)) ? "▾ " : "▸ " : "  ";
     return indentation + (row.directory ? accent(marker) : marker) + (row.directory ? accent(basename(path)) : color(basename(path), "a9b7c6")) + (row.directory ? "/" : "");
   }
   return accent(row.label);
@@ -376,7 +421,7 @@ function renderRow(row: Row): string {
 function setSections(title: string, subtitle: string, next: Section[]): void {
   sections = next; sectionIndex = 0; selection = undefined; dragging = false;
   endDrag();
-  itemHeader.setContent(`${accent(clip(title, Number(detailFrame.width) - 4, true))}\n${sliceStyled(strip(subtitle) === subtitle ? gray(subtitle) : subtitle, 0, Number(detailFrame.width) - 4)}`);
+  itemHeader.setContent(`${accent(clip(title, Number(detailFrame.width) - 4))}\n${sliceStyled(strip(subtitle) === subtitle ? gray(subtitle) : subtitle, 0, Number(detailFrame.width) - 4)}`);
   sectionButtons.forEach(button => button.destroy()); sectionButtons.length = 0;
   let left = 0;
   sections.forEach((section, index) => {
@@ -393,12 +438,13 @@ async function renderSection(): Promise<void> {
   if (view === 5) return;
   const version = ++generation;
   const section = sections[sectionIndex];
+  verbatim = new Set(section?.verbatim || []);
   selection = undefined; endDrag();
   detailX = 0; sourceNumbers = undefined; sourceNotes.clear(); hoverLink = undefined;
   gutter.hide(); detail.left = 0;
   gutter.top = sections.length < 2 ? 2 : 4;
   detailVertical.top = sections.length < 2 ? 2 : 4;
-  detail.childBase = 0; detail.childOffset = 0;
+  detailBase = 0;
   sectionButtons.forEach((button, index) => {
     button.style.fg = index === sectionIndex ? "cyan" : "gray";
     button.style.underline = index === sectionIndex;
@@ -408,7 +454,7 @@ async function renderSection(): Promise<void> {
   try {
     await new Promise(accept => setTimeout(accept, 100));
     if (version !== generation) return;
-    const preview = await run<SourcePreview>("source", ["--path", section.source.path, "--line", String(section.source.line), "--count", "500", "--highlight"]);
+    const preview = await run<SourcePreview>("source", ["--path", section.source.path, "--highlight"]);
     if (version !== generation) return;
     sourceNumbers = preview.lines.map(line => line.number);
     gutter.top = sections.length < 2 ? 2 : 4; gutter.show(); detail.left = 7;
@@ -421,6 +467,8 @@ async function renderSection(): Promise<void> {
       sourceNotes.set(finding.line, notes);
     }
     prepareDetail();
+    const target = Math.max(0, section.source.line - 1);
+    detailBase = Math.min(Math.max(0, visualRows.length - detailHeight()), Math.max(0, visualRows.findIndex(row => row.logical === target)));
     paintDetail(); screen.render();
   } catch (error) {
     if (version === generation) { setDetail(danger(`Preview unavailable: ${clean(error)}`)); }
@@ -507,12 +555,12 @@ function prepareDetail(): void {
       const shade = notes.some(note => note.severity === "error") ? "41;37" : "43;30";
       const words = Array.from(clean(message));
       for (let first = 0; first < words.length; first += Math.max(1, width - 2)) {
-        visualRows.push({ logical: row, start: 0, banner: true,
+        visualRows.push({ logical: row, start: 0, banner: true, severity: notes.some(note => note.severity === "error") ? "error" : "warning",
           text: `\x1b[${shade};1m ${words.slice(first, first + Math.max(1, width - 2)).join("").padEnd(width - 1)}\x1b[0m` });
       }
     }
     const styled = notes?.length ? `\x1b[4m${notes.some(note => note.severity === "error") ? color(line, "ff6b68") : warning(line)}\x1b[24m` : styledLines[row];
-    const sensitive = !!sourceNumbers || detailLinks.some(link => link.row === row) || /\s{2,}\S|[A-Za-z]:[\\/]|(?:^|\s)[.@]?[\w-]+[\\/][^\s]+|^(?:\s*(?:import |class |def |function |\{|\[|Recovery lines:))/.test(line);
+    const sensitive = !!sourceNumbers || verbatim.has(line) || detailLinks.some(link => link.row === row) || /\s{2,}\S|[A-Za-z]:[\\/]|(?:^|\s)[.@]?[\w-]+[\\/][^\s]+|^(?:\s*(?:(?:async\s+)?function |class |def |import |\{|\[|Recovery lines:))/.test(line);
     const total = displayWidth(line);
     if (sensitive || total <= width) {
       visualRows.push({ logical: row, start: 0, text: styled }); detailExtent = Math.max(detailExtent, total); return;
@@ -530,14 +578,11 @@ function prepareDetail(): void {
 }
 
 function paintDetail(): void {
-  const base = detail.childBase;
   detailX = Math.min(detailX, horizontalLimit("detail"));
-  detail.setContent(visualRows.map(line => sliceStyled(line.text, detailX, detailWidth())).join("\n"));
-  detail.childBase = base;
-  detail.childOffset = 0;
+  detail.setContent(visualRows.slice(detailBase, detailBase + detailHeight()).map(line => sliceStyled(line.text, line.banner ? 0 : detailX, detailWidth())).join("\n"));
   paintGutter();
   paintBar(detailBar, detailX, horizontalLimit("detail"), detailWidth());
-  paintBar(detailVertical, detail.childBase, Math.max(0, visualRows.length - detailHeight()), detailHeight(), true);
+  paintBar(detailVertical, detailBase, Math.max(0, visualRows.length - detailHeight()), detailHeight(), true);
 }
 
 function setDetail(text: string): void {
@@ -547,9 +592,9 @@ function setDetail(text: string): void {
 }
 
 function paintGutter(): void {
-  paintBar(detailVertical, detail.childBase, Math.max(0, visualRows.length - detailHeight()), detailHeight(), true);
+  paintBar(detailVertical, detailBase, Math.max(0, visualRows.length - detailHeight()), detailHeight(), true);
   if (!sourceNumbers) return;
-  gutter.setContent(visualRows.slice(detail.childBase, detail.childBase + detailHeight()).map(row => row.banner ? " " : String(sourceNumbers![row.logical]).padStart(5)).join("\n"));
+  gutter.setContent(visualRows.slice(detailBase, detailBase + detailHeight()).map(row => row.banner ? " " : String(sourceNumbers![row.logical]).padStart(5)).join("\n"));
 }
 
 function listHeight(): number { return Math.max(1, Number(list.height) - Number(list.iheight)); }
@@ -589,14 +634,23 @@ async function show(index: number): Promise<void> {
   selectedRow = index;
   activeFile = row?.file?.path || row?.symbol?.path || row?.finding?.path;
   if (view === 5) {
-    itemHeader.setContent(`${accent(chart.path || basename(root))}\n${gray("Rings = directory levels · area = lines · click core to go up")}`);
+    itemHeader.setContent(`${accent(chart.path || basename(root))}\n${gray("● folders · files colored by language · lines / %")}`);
     chart.render(); return;
   }
   if (view === 0) { setSections(row?.section || "Overview", basename(root), [{ name: "Summary", text: overview(index) }]); return; }
   if (view === 6) { setSections("Revision comparison", comparison ? `${comparison.before.revision.slice(0, 12)} → ${comparison.after.revision.slice(0, 12)}` : "Press c to choose a base revision", [{ name: "Comparison", text: comparisonText() }]); return; }
   if (!row || !report) { setSections("No matching entries", "Clear the search or filter", [{ name: "Empty", text: "" }]); return; }
+  if (row.group) {
+    const findings = row.group.findings;
+    const counts = new Map<string, number>();
+    findings.forEach(finding => counts.set(finding.type, (counts.get(finding.type) || 0) + 1));
+    setSections(row.group.name, "Enter or double-click to expand", [{ name: "Summary", text: pairs([
+      ["Findings", findings.length], ["Files", new Set(findings.map(finding => finding.path)).size],
+      ...[...counts].map<[string, unknown]>(([type, count]) => [type, count])]) }]);
+    return;
+  }
   if (row.directory) {
-    const files = report.files.filter(f => f.path.startsWith(row.directory + "/"));
+    const files = report.files.filter(f => f.path.startsWith(row.directory + "/") && (view !== 2 || f.symbols.length));
     setSections(row.directory + "/", "Enter or double-click to expand", [{ name: "Info", text: pairs([
       ["Files", files.length], ["Source files", files.filter(f => f.category === "source").length],
       ["Lines", files.reduce((sum, f) => sum + f.lines, 0)]]) }]);
@@ -609,7 +663,7 @@ async function show(index: number): Promise<void> {
         ["Cyclomatic", f.metrics.cyclomatic || 0], ["Fan-in / fan-out", `${f.metrics.fan_in} / ${f.metrics.fan_out}`],
         ["Dependency depth", f.metrics.dependency_depth], ["Internal-call ratio", f.metrics.cohesion], ["Hotspot score", f.metrics.hotspot]]) },
       { name: "Source", text: "Loading source…", source: { path: f.path, line: row.hit?.line || 1 } },
-      { name: "Symbols", text: f.symbols.map(s => `${accent(s.line)}  ${clean(s.name)}\n${gray(s.signature)}`).join("\n\n") || "No extracted symbols." },
+      { name: "Symbols", text: f.symbols.map(s => `${accent(s.line)}  ${clean(s.name)}\n${gray(s.signature)}`).join("\n\n") || "No extracted symbols.", verbatim: f.symbols.map(s => clean(s.signature)) },
       { name: "Imports", text: f.imports.map(i => `${gray(String(i.line).padStart(5))}  ${color(i.target, "6a8759")}`).join("\n") || gray("No parsed imports.") },
       { name: "Churn", text: pairs([["Commits in window", f.churn.commits], ["Lines added", f.churn.added], ["Lines removed", f.churn.removed]]) },
     ]);
@@ -621,7 +675,7 @@ async function show(index: number): Promise<void> {
     setSections(s.name, `${s.path}:${s.line} · ${s.confidence} confidence`, [
       { name: "Info", text: fileLink(s.path) + "\n\n" + color(s.signature, "ffc66d") + "\n\n" + pairs([["Kind", s.kind], ["Lines", s.metrics?.lines],
         ["Cyclomatic", s.metrics?.cyclomatic], ["Cognitive", s.metrics?.cognitive], ["Nesting", s.metrics?.nesting],
-        ["Fan-in / fan-out", `${s.structural.fan_in} / ${s.structural.fan_out}`]]) },
+        ["Fan-in / fan-out", `${s.structural.fan_in} / ${s.structural.fan_out}`]]), verbatim: [clean(s.signature)] },
       { name: "Source", text: "Loading source…", source: { path: s.path, line: s.line } },
       { name: "Calls", text: `${accent("Called by")}\n${incoming.map(e => `${reference(e.source)} ${gray(e.confidence)}`).join("\n") || "None resolved"}\n\n${accent("Calls")}\n${outgoing.map(e => `${reference(e.target)} ${gray(e.confidence)}`).join("\n") || "None resolved"}` },
     ]);
@@ -635,7 +689,7 @@ async function show(index: number): Promise<void> {
     ]);
   }
   if (row.commit) setSections(row.commit.subject, row.commit.date.slice(0, 10), [
-    { name: "Commit", text: color(row.commit.revision, "ffc66d") + "\n\n" + color(row.commit.subject, "a9b7c6") + "\n\n" + gray("Enter or double-click to compare with the current revision.") },
+    { name: "Commit", text: color(row.commit.revision, "ffc66d") + "\n\n" + color(row.commit.subject, "a9b7c6") + "\n\n" + gray("Enter or double-click to compare with the current revision."), verbatim: [row.commit.revision] },
     { name: "Branches", text: report.history.branches.map(accent).join("\n") || gray("No branches.") },
   ]);
 }
@@ -704,7 +758,8 @@ function point(data: Mouse) {
   const position = detail.lpos;
   if (!position) return { row: 0, column: 0 };
   const y = Math.max(position.yi + Number(detail.itop), Math.min(position.yl - detailGeometry.ibottom - 1, data.y));
-  const visual = visualRows[Math.max(0, y - position.yi - Number(detail.itop) + detail.childBase)];
+  const visual = visualRows[Math.max(0, y - position.yi - Number(detail.itop) + detailBase)];
+  if (visual?.banner) return { row: visual.logical, column: 0 };
   return { row: visual?.logical || 0,
     column: Math.max(0, (visual?.start || 0) + detailX + Math.min(detailWidth() - 1, Math.max(0, data.x - position.xi - Number(detail.ileft)))) };
 }
@@ -723,6 +778,8 @@ detail.on("mousedown", (data: Mouse) => {
   if (data.ctrl && linkAt(data)) return;
   const pos = detail.lpos;
   if (!pos || data.x >= pos.xl - detailGeometry.iright - 1) return;
+  const visual = visualRows[Math.max(0, data.y - pos.yi - Number(detail.itop) + detailBase)];
+  if (visual?.banner) { selection = undefined; endDrag(); detail.focus(); screen.render(); return; }
   detail.focus(); dragging = true;
   endDrag(); dragging = true;
   lastPointer = data;
@@ -730,8 +787,8 @@ detail.on("mousedown", (data: Mouse) => {
   dragTimer = setInterval(() => {
     if (!dragging || !lastPointer || !detail.lpos) return;
     const pos = detail.lpos;
-    if (lastPointer.y < pos.yi + Number(detail.itop)) setVertical("detail", detail.childBase - 1);
-    else if (lastPointer.y >= pos.yl - detailGeometry.ibottom) setVertical("detail", detail.childBase + 1);
+    if (lastPointer.y < pos.yi + Number(detail.itop)) setVertical("detail", detailBase - 1);
+    else if (lastPointer.y >= pos.yl - detailGeometry.ibottom) setVertical("detail", detailBase + 1);
     if (lastPointer.x < pos.xi + Number(detail.ileft)) pan("detail", -1);
     else if (lastPointer.x >= pos.xi + Number(detail.ileft) + detailWidth()) pan("detail", 1);
     if (selection) selection.end = point(lastPointer);
@@ -761,7 +818,7 @@ screen.program.on("mouse", (data: Mouse) => {
         const maximum = horizontal ? horizontalLimit(area) : Math.max(0, (area === "detail" ? visualRows.length : rows.length) - viewport);
         const length = horizontal ? bar.lpos.xl - bar.lpos.xi : bar.lpos.yl - bar.lpos.yi;
         const thumb = Math.max(1, Math.floor(length * viewport / Math.max(1, maximum + viewport)));
-        const offset = horizontal ? area === "detail" ? detailX : listX : area === "detail" ? detail.childBase : listBase;
+        const offset = horizontal ? area === "detail" ? detailX : listX : area === "detail" ? detailBase : listBase;
         const start = maximum ? Math.round((length - thumb) * offset / maximum) : 0;
         const position = horizontal ? data.x - bar.lpos.xi : data.y - bar.lpos.yi;
         const grab = position >= start && position < start + thumb ? position - start : thumb / 2;
@@ -775,7 +832,7 @@ screen.program.on("mouse", (data: Mouse) => {
     const forward = data.action === "wheeldown" || data.action === "wheelright";
     if (data.shift || data.action === "wheelright" || data.action === "wheelleft") pan(area, forward ? 1 : -1);
     else if (area === "list") selectRow(selectedRow + (forward ? 1 : -1));
-    else { setVertical(area, detail.childBase + (forward ? 1 : -1)); screen.render(); }
+    else { setVertical(area, detailBase + (forward ? 1 : -1)); screen.render(); }
     if (dragging && selection) { selection.end = point(lastPointer || data); screen.render(); }
     return;
   }
@@ -792,7 +849,7 @@ detail.on("render", () => {
   const pos = detail.lpos;
   if (!range || !pos || prompt.visible) return;
   const buffer = (screen as typeof screen & { lines: (Array<[number, string]> & { dirty: boolean })[] }).lines;
-  const scroll = detail.childBase;
+  const scroll = detailBase;
   for (let y = pos.yi + Number(detail.itop); y < pos.yl - detailGeometry.ibottom; y++) {
     const visual = visualRows[y - pos.yi - Number(detail.itop) + scroll];
     if (!visual || visual.banner) continue;
@@ -803,7 +860,7 @@ detail.on("render", () => {
     const end = row === range.end.row ? left + range.end.column + 1 - visual.start - detailX : pos.xl - detailGeometry.iright - 1;
     for (let x = start; x < Math.min(end, left + displayWidth(visual.text) - detailX, pos.xl - detailGeometry.iright - 1); x++) {
       const cell = buffer[y]?.[x];
-      if (cell) { cell[0] |= 8 << 18; buffer[y].dirty = true; }
+      if (cell) { cell[0] = (cell[0] & ~((8 << 18) | 0x3ffff)) | (7 << 9) | 4; buffer[y].dirty = true; }
     }
   }
 });
@@ -811,12 +868,25 @@ detail.on("render", () => {
   if (!hoverLink || !detail.lpos) return;
   const pos = detail.lpos;
   const buffer = (screen as typeof screen & { lines: (Array<[number, string]> & { dirty: boolean })[] }).lines;
-  visualRows.slice(detail.childBase, detail.childBase + detailHeight()).forEach((row, index) => {
+  visualRows.slice(detailBase, detailBase + detailHeight()).forEach((row, index) => {
     if (row.logical !== hoverLink!.row || row.banner) return;
     const left = pos.xi + Number(detail.ileft);
     const y = pos.yi + Number(detail.itop) + index;
     for (let x = Math.max(left, left + hoverLink!.start - row.start - detailX); x < Math.min(left + detailWidth(), left + hoverLink!.end - row.start - detailX); x++) {
       const cell = buffer[y]?.[x]; if (cell) { cell[0] |= 2 << 18; buffer[y].dirty = true; }
+    }
+  });
+});
+detail.on("render", () => {
+  if (!detail.lpos) return;
+  const pos = detail.lpos;
+  const buffer = (screen as typeof screen & { lines: (Array<[number, string]> & { dirty: boolean })[] }).lines;
+  visualRows.slice(detailBase, detailBase + detailHeight()).forEach((row, index) => {
+    if (!row.banner) return;
+    const y = pos.yi + Number(detail.itop) + index;
+    const attribute = (1 << 18) | (row.severity === "error" ? (7 << 9) | 1 : 3);
+    for (let x = pos.xi + Number(detail.ileft); x < pos.xi + Number(detail.ileft) + detailWidth(); x++) {
+      const cell = buffer[y]?.[x]; if (cell) { cell[0] = attribute; buffer[y].dirty = true; }
     }
   });
 });
@@ -837,7 +907,7 @@ function setVertical(area: "list" | "detail", offset: number): void {
   const count = area === "list" ? rows.length : visualRows.length;
   const next = Math.max(0, Math.min(Math.max(0, count - visible), offset));
   if (area === "list") { listBase = next; selectRow(next); }
-  else { widget.scroll(next - widget.childBase, true); paintGutter(); }
+  else { detailBase = next; paintDetail(); }
 }
 
 function dragScrollbar(data: Mouse): void {
@@ -870,7 +940,6 @@ for (const widget of [list, detail]) {
   widget.removeAllListeners("element wheelup"); widget.removeAllListeners("element wheeldown");
 }
 list.removeAllListeners("mousedown");
-detail.on("scroll", paintGutter);
 
 async function clipboard(text: string): Promise<void> {
   const commands: [string, string[]][] = process.platform === "win32"
@@ -930,38 +999,36 @@ async function moreHistory(): Promise<void> {
 
 async function search(answer: string): Promise<void> {
   const version = ++searchVersion;
-  query = answer; sourceHits.clear();
+  query = answer; sourceHits.clear(); closedFolders.clear();
   if (!rgAvailable || revision || !answer) { rebuild(); return; }
   status = "Searching source with ripgrep…"; renderHeader();
   try {
     const hits = await new Promise<Map<string, { line: number; text: string }[]>>((accept, reject) => {
       const matches = new Map<string, { line: number; text: string }[]>();
-      const child = spawn("rg", ["--json", "--fixed-strings", "--ignore-case", "--max-count", "20", "--", answer, "."], { cwd: root, windowsHide: true });
+      const child = spawn("rg", ["--json", "--fixed-strings", "--ignore-case", "--", answer, "."], { cwd: root, windowsHide: true });
       child.stdout.setEncoding("utf8");
-      children.add(child); let pending = "", errors = "", count = 0;
+      children.add(child); let pending = "", errors = "";
       child.stdout.on("data", data => {
         pending += data.toString(); const lines = pending.split("\n"); pending = lines.pop() || "";
         for (const line of lines) {
-          if (count >= 200) break;
           const event = JSON.parse(line);
           if (event.type !== "match" || !event.data.path.text) continue;
           const path = event.data.path.text.replace(/\\/g, "/").replace(/^\.\//, "");
           if (!fileMap.has(path)) continue;
           const fileHits = matches.get(path) || [];
-          fileHits.push({ line: event.data.line_number, text: clean(event.data.lines.text).trimEnd() }); matches.set(path, fileHits); count++;
+          fileHits.push({ line: event.data.line_number, text: clean(event.data.lines.text).trimEnd() }); matches.set(path, fileHits);
         }
-        if (count >= 200) child.kill();
       });
       child.stderr.on("data", data => errors += data.toString());
       child.on("error", reject); child.on("close", code => {
         children.delete(child);
-        if (code === 0 || code === 1 || count >= 200) accept(matches); else reject(new Error(errors || "ripgrep search failed"));
+        if (code === 0 || code === 1) accept(matches); else reject(new Error(errors || "ripgrep search failed"));
       });
     });
     if (version !== searchVersion) return;
     sourceHits = hits; view = 1; listBase = 0;
     const count = [...hits.values()].reduce((sum, values) => sum + values.length, 0);
-    status = `${count} source matches${count >= 200 ? " · first 200 shown" : ""} · ripgrep`;
+    status = `${count} source matches · ripgrep`;
     rebuild(); list.focus();
   } catch (error) { if (version === searchVersion) { status = `Error searching: ${clean(error)}`; rebuild(); } }
 }
@@ -1003,13 +1070,7 @@ function wireRows(): void {
     const index = listBase + listItems.items.indexOf(item);
     selectRow(index); list.focus(); selection = undefined; endDrag();
     const now = Date.now();
-    if (data.ctrl || (lastClick.row === index && now - lastClick.time < 350)) {
-      const row = rows[index];
-      const path = row?.file?.path || row?.symbol?.path;
-      if (view === 5 || row?.directory || row?.branch) activateRow();
-      else if (path) void openFile(path);
-      else if (!row?.finding) activateRow();
-    }
+    if (lastClick.row === index && now - lastClick.time < 350) activateRow();
     lastClick = { row: index, time: now }; screen.render();
   });
   }
@@ -1072,10 +1133,12 @@ function activateRow(): void {
   const row = rows[selectedRow];
   if (!row || !report) return;
   if (view === 5) { if (row.directory) { chart.setPath(row.directory); rebuild(); } else if (row.file) { view = 1; query = row.file.path; rebuild(); } }
-  else if (row.branch && row.symbol) { symbolExpanded.has(row.symbol.id) ? symbolExpanded.delete(row.symbol.id) : symbolExpanded.add(row.symbol.id); rebuild(undefined, selectedRow); }
-  else if (row.directory) { expanded.has(row.directory) ? expanded.delete(row.directory) : expanded.add(row.directory); rebuild(row.directory); }
+  else if (row.group) { toggleFolder(row.group.key, issueExpanded, !!(query || filter)); rebuild(undefined, selectedRow); }
+  else if (view === 2 && row.file) { toggleFolder("file:" + row.file.path, symbolExpanded, !!(query || filter)); rebuild(undefined, selectedRow); }
+  else if (row.branch && row.symbol) { toggleFolder(row.symbol.id, symbolExpanded, !!(query || filter)); rebuild(undefined, selectedRow); }
+  else if (row.directory) { const key = "dir:" + row.directory; const open = folderOpen(key, expanded, view === 2 && !!(query || filter)); if (open) { expanded.delete(row.directory); closedFolders.add(key); } else { expanded.add(row.directory); closedFolders.delete(key); } rebuild(row.directory); }
   else if (row.commit) void action(() => compareWith(row.commit!.revision));
-  else if (row.file) { query = row.file.path; filter = ""; view = 2; rebuild(); }
+  else if (row.file) { if (!row.file.symbols.length) { detail.focus(); return; } query = row.file.path; filter = ""; closedFolders.clear(); view = 2; rebuild(); const index = rows.findIndex(item => item.file?.path === row.file!.path); if (index >= 0) selectRow(index); }
   else detail.focus();
 }
 
@@ -1086,12 +1149,13 @@ for (const pane of [list, detail, chart.box]) pane.on("focus", () => {
   screen.render();
 });
 screen.key(["up", "down", "j", "k", "pageup", "pagedown", "home", "end"], (_character, key) => {
+  if (screen.focused === chart.box) return;
   const direction = ["up", "k", "pageup", "home"].includes(key.name) ? -1 : 1;
   const amount = key.name.startsWith("page") ? screen.focused === list || screen.focused === chart.box ? listHeight() : detailHeight() : 1;
   if (screen.focused === list || screen.focused === chart.box) selectRow(key.name === "home" ? 0 : key.name === "end" ? rows.length - 1 : selectedRow + direction * amount);
-  else { setVertical("detail", key.name === "home" ? 0 : key.name === "end" ? visualRows.length : detail.childBase + direction * amount); screen.render(); }
+  else { setVertical("detail", key.name === "home" ? 0 : key.name === "end" ? visualRows.length : detailBase + direction * amount); screen.render(); }
 });
-screen.key("enter", () => { if (screen.focused === list || screen.focused === chart.box) activateRow(); });
+screen.key("enter", () => { if (screen.focused === list) activateRow(); });
 screen.key("q", () => { for (const child of children) stopChild(child); screen.destroy(); process.exit(0); });
 screen.key("C-c", () => { void copyCurrent(); });
 screen.key("escape", () => { selection = undefined; endDrag(); scrollDrag = undefined; (view === 6 ? detail : list).focus(); screen.render(); });
@@ -1099,15 +1163,15 @@ screen.key(["tab"], () => { view === 6 ? detail.focus() : screen.focused === lis
 for (let i = 0; i < views.length; i++) screen.key(String(i + 1), () => switchView(i));
 screen.key(["left", "right", "S-left", "S-right"], (_character, key) => { if (screen.focused !== chart.box) pan(screen.focused === list ? "list" : "detail", (key.name === "left" ? -1 : 1) * (key.shift ? 10 : 1)); });
 screen.key("o", () => { if (activeFile) void openFile(activeFile); });
-screen.key(["[", "]"], (_character, key) => {
+screen.key(["[", "]"], (character, key) => {
   if (view === 5) return;
   if (sections.length < 2) return;
-  sectionIndex = (sectionIndex + (key.name === "[" ? -1 : 1) + sections.length) % sections.length;
+  sectionIndex = (sectionIndex + (character === "[" || key.full === "[" ? -1 : 1) + sections.length) % sections.length;
   void renderSection();
 });
 screen.key("v", () => { if (view === 5) return; const index = sections.findIndex(section => section.source); if (index >= 0) { sectionIndex = index; detail.focus(); void renderSection(); } });
 screen.key("/", () => ask(rgAvailable && !revision ? "Search names, paths and source (ripgrep)" : "Search names and paths", query, answer => { void search(answer); }));
-screen.key("f", () => ask("Filter: language/category/status, symbol kind, finding type/severity (empty clears)", filter, answer => { filter = answer; rebuild(); }));
+screen.key("f", () => ask("Filter: language/category/status, symbol kind, finding type/severity (empty clears)", filter, answer => { filter = answer; closedFolders.clear(); rebuild(); }));
 screen.key("s", () => { sorted = !sorted; rebuild(); });
 screen.key("l", () => { if (view === 5) { chart.setPath(""); rebuild(); } });
 screen.key("backspace", () => { if (view === 5) { chart.setPath(chart.path.split("/").slice(0, -1).join("/")); rebuild(); } });
@@ -1117,11 +1181,18 @@ screen.key("b", () => ask("Commit or branch (empty = working tree)", revision ||
   try { await refresh(); } catch (error) { revision = previous; throw error; }
 }); }));
 screen.key("c", () => ask("Compare base commit/branch with current analysis", "HEAD", answer => { if (answer) void action(() => compareWith(answer)); }));
-screen.key("e", () => ask("Export JSON report to path", resolve(root, ".repolens/report.json"), answer => { if (answer) void action(async () => {
-  const { mkdir } = await import("node:fs/promises"); const { dirname } = await import("node:path");
-  await mkdir(dirname(resolve(answer)), { recursive: true });
-  const result = await run<{ output: string }>("export", ["--output", resolve(answer)]); status = `Exported ${result.output}`;
-}); }));
+screen.key("e", () => {
+  if (busy) return;
+  endDrag(); scrollDrag = undefined;
+  dialog.choose("Export JSON layout", [{ label: "Single JSON", value: "json" }, { label: "Grouped folder", value: "json-folder" }], format => {
+    if (!format) return;
+    ask(format === "json" ? "Export JSON report to file" : "Export grouped JSON files to folder", resolve(root, format === "json" ? ".repolens/report.json" : ".repolens/report"), answer => {
+      if (answer) void action(async () => {
+        const result = await run<{ output: string }>("export", ["--format", format, "--output", resolve(answer)]); status = `Exported ${result.output}`;
+      });
+    });
+  });
+});
 screen.key("g", () => ask("Generate managed architecture section in root README.md? Type yes", "", answer => { if (answer === "yes") void action(async () => {
   const result = await run<{ output: string }>("readme"); status = `Updated ${result.output}`;
 }); }));

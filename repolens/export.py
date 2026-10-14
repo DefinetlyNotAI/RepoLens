@@ -8,9 +8,9 @@ START = "<!-- repolens:start -->"
 END = "<!-- repolens:end -->"
 
 
-def mermaid(report, level="module", limit=100):
+def mermaid(report, level="module"):
     graph = report["graphs"][level]
-    nodes = graph["nodes"][:limit]
+    nodes = graph["nodes"]
     ids = {node: f"n{i}" for i, node in enumerate(nodes)}
     symbols = {s["id"]: s["name"] for file in report["files"] for s in file["symbols"]}
     lines = ["flowchart LR"]
@@ -20,8 +20,6 @@ def mermaid(report, level="module", limit=100):
     for a, b in graph.get("edges", []):
         if a in ids and b in ids:
             lines.append(f"  {ids[a]} --> {ids[b]}")
-    if len(graph["nodes"]) > limit:
-        lines.append(f"  %% Showing {limit} of {len(graph['nodes'])} nodes")
     return "\n".join(lines)
 
 
@@ -32,6 +30,32 @@ def export_report(report, path, format="json", level="module"):
         if target.suffix.lower() != ".json":
             raise ValueError("JSON exports require a .json filename")
         target.write_text(json.dumps(report, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    elif format == "json-folder":
+        target.mkdir(parents=True, exist_ok=True)
+        issues = {}
+        for finding in report["findings"]:
+            issues.setdefault(finding["severity"], {}).setdefault(finding["type"], []).append(finding)
+        folders = {".": {"lines": 0, "files": 0}}
+        for file in report["files"]:
+            parts = Path(file["path"]).parts
+            for depth in range(len(parts)):
+                folder = Path(*parts[:depth]).as_posix() if depth else "."
+                totals = folders.setdefault(folder, {"lines": 0, "files": 0})
+                totals["lines"] += file["lines"]
+                totals["files"] += 1
+        groups = {
+            "overview": {key: report[key] for key in ("summary", "incremental", "limitations", "diagnostics")},
+            "files": {"files": report["files"]},
+            "symbols": {"files": {file["path"]: file["symbols"] for file in report["files"] if file["symbols"]}},
+            "issues": {"groups": issues},
+            "history": report["history"],
+            "size": {"folders": folders, "files": [{"path": file["path"], "lines": file["lines"]} for file in report["files"]]},
+            "dependencies": {"dependencies": report["dependencies"]},
+            "relationships": {key: report[key] for key in ("edges", "symbol_edges", "graphs")},
+        }
+        for name, content in groups.items():
+            payload = {"root": report["root"], "revision": report["revision"], **content}
+            (target / f"{name}.json").write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
     elif format == "graphml":
         if target.suffix.lower() != ".graphml":
             raise ValueError("Graph exports require a .graphml filename")

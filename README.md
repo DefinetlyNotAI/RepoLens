@@ -27,6 +27,7 @@ repolens trends . --revisions HEAD~2 HEAD~1 HEAD --json
 repolens trends . --json
 repolens source . --path src/main.py --line 20 --count 40
 repolens export . --format json --output report.json
+repolens export . --format json-folder --output report
 repolens export . --format graphml --level function --output functions.graphml
 repolens export . --format mermaid --level directory
 repolens readme .
@@ -46,8 +47,8 @@ Cache and historical snapshots live at `%LOCALAPPDATA%/RepoLens/analysis.sqlite3
 | Tab | Focus list or scrollable source/detail pane |
 | [ / ] / click detail tab | Choose metrics, source, imports, calls, or churn for the selected item |
 | v | Open source preview |
-| Click / double-click row | Select / open file in its default application or expand directory |
-| o / Ctrl+click or double-click path | Open the referenced local file; findings rows do not open files |
+| Click / double-click row | Select / inspect or expand; selector rows do not launch files |
+| o / Ctrl+click or double-click detail path | Open the referenced local file |
 | ← → / Shift+← → | Pan the focused pane by 1 / 10 columns |
 | Wheel / Shift+wheel | Scroll one row / pan horizontally |
 | Drag scrollbar | Scroll vertically or horizontally |
@@ -60,11 +61,13 @@ Cache and historical snapshots live at `%LOCALAPPDATA%/RepoLens/analysis.sqlite3
 | e, g | Export JSON, generate managed README section |
 | ?, q | Help, exit |
 
-Filters accept language, category, parser status, symbol kind, finding type, severity, or confidence depending on the view. When `rg` is installed, working-tree searches include source text (up to 200 matches); historical searches use analyzed names and paths. The Size view is a hoverable sunburst: the core is the selected directory, rings follow directory levels, and angular size follows line counts. Click a directory segment to explore it or its core to go up. Symbols nest under their extracted owners, including anonymous callbacks. The comparison view shows base/current totals, changed files, and added/removed dependency edges. Graph exports remain available through the CLI.
+Filters accept language, category, parser status, symbol kind, finding type, severity, or confidence depending on the view. When `rg` is installed, working-tree searches include all source matches; historical searches use analyzed names and paths. Size uses a colored connector tree with line counts and percentages, with file colors following language. Hover for totals, click folders to explore them, and scroll or pan to reach every node. Symbols follow directory → file → class/function nesting; unnamed callbacks and lambdas are excluded from symbol counts. Issues expand by severity and finding type. Matching folders can be collapsed during a search. The comparison view shows base/current totals, changed files, and added/removed dependency edges. Graph exports remain available through the CLI.
 
-Source previews use Tree-sitter syntax categories with Darcula colors, including CSS selectors/properties, JSX tags, and [PyCharm-specific token colors](https://github.com/JetBrains/intellij-community/blob/master/python/pluginResources/colorSchemes/PythonDarcula.xml). IDE semantic analysis and terminal color support can produce different results. Source warnings/errors have colored underlines and banners; grammar recovery remains a partial-coverage notice. Code and paths scroll horizontally, while prose wraps. File references display relative paths, underline on hover, and open through the operating-system association. Without a text selection, copying uses the focused detail or row. The focused pane has a blue border; list rendering is limited to visible rows.
+Source views load the complete file, with no automatic line or byte cutoff. Lists, source panes, and the Size diagram draw only the visible rows while keeping all data available for scrolling and copying. Source uses Tree-sitter syntax categories with Darcula colors, including CSS selectors/properties, JSX tags, and [PyCharm-specific token colors](https://github.com/JetBrains/intellij-community/blob/master/python/pluginResources/colorSchemes/PythonDarcula.xml). IDE semantic analysis and terminal color support can produce different results. Warning banners use black text on yellow, error banners use white text on red, and selected source uses white text on blue. Grammar recovery remains a partial-coverage notice. Code, signatures, and paths scroll horizontally, while prose wraps. Detail file references underline on hover and open through the operating-system association. Without a text selection, copying uses the focused detail or row. The focused pane has a blue border.
 
 All input dialogs support Enter/Okay, Escape/Cancel, Tab between options, mouse caret placement, arrow/Home/End navigation, Shift selection, Ctrl+A/C/X/V, right-click paste, and bracketed terminal paste.
+
+Export (`e`) offers a single JSON file or a grouped folder. Grouped export writes `overview.json`, `files.json`, `symbols.json`, `issues.json`, `history.json`, `size.json`, `dependencies.json`, and `relationships.json`, each with the repository root and revision. Issues are grouped by severity/type; symbols by file. Existing unrelated files in the destination are preserved.
 
 ## Coverage and interpretation
 
@@ -76,6 +79,6 @@ Cyclomatic scores count structural branches and logical operators; cognitive sco
 
 Duplication compares normalized syntax tokens and syntax shingles within a language. Renamed identifiers and literals can match; findings are review candidates. Similarity uses bounded candidate lists to control cost. Calls are conservatively resolved and carry confidence; dynamic dispatch, type inference, callbacks, and complete runtime reachability are outside current coverage. Unreachable-code findings identify sequential statements after unconditional exits in syntax blocks. RepoLens does not claim that unreferenced public APIs are dead code or that static metrics predict runtime performance. Cross-language edges are only reported where a path establishes a relationship.
 
-Git-aware discovery respects ignored untracked files. Generated directories, symlinks, binaries, and files above 2 MiB are excluded and applicable skips are reported. Git churn covers the selected recent commit window; rename-only records are not attributed. Large histories should use a bounded window. JSON reports expose diagnostics, unresolved relationships, metric evidence, and coverage boundaries alongside the findings.
+Git-aware discovery respects ignored untracked files. Generated directories, symlinks, and binaries are excluded and applicable skips are reported; text files have no size cutoff. Git churn covers the selected recent commit window; rename-only records are not attributed. `--history-limit` selects that window, while the TUI continues loading older commits through pagination. JSON reports expose diagnostics, unresolved relationships, metric evidence, and coverage boundaries alongside the findings.
 
 MIT licensed. See LICENSE.

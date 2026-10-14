@@ -8,13 +8,15 @@ export function inputDialog(screen: blessed.Widgets.Screen, readClipboard: () =>
     style: { fg: "white", bg: "gray" } });
   const hint = blessed.box({ parent: box, top: 3, left: 1, right: 1, height: 1,
     content: "← → move · Ctrl+A select all · Ctrl+V paste · Tab options", style: { fg: "gray" } });
-  const okay = blessed.button({ parent: box, top: 5, left: 1, width: 8, height: 1, content: "  Okay  ", mouse: true, keys: true });
-  const cancel = blessed.button({ parent: box, top: 5, left: 11, width: 10, height: 1, content: "  Cancel  ", mouse: true, keys: true });
+  const okay = blessed.button({ parent: box, top: 5, left: 1, width: 8, height: 1, content: "  Okay  ", mouse: true });
+  const cancel = blessed.button({ parent: box, top: 5, left: 11, width: 10, height: 1, content: "  Cancel  ", mouse: true });
   let text: string[] = [], cursor = 0, offset = 0, anchor: number | undefined;
   let done: ((answer?: string) => void) | undefined;
   let previous: blessed.Widgets.BlessedElement | undefined;
   let pastePending = false;
   let bracketed: string | undefined;
+  let choices: { label: string; value: string }[] | undefined;
+  let choice = 0;
   const range = () => anchor === undefined ? [cursor, cursor] : [Math.min(anchor, cursor), Math.max(anchor, cursor)];
   function render() {
     const width = Math.max(1, Number(input.width) - 1);
@@ -29,7 +31,7 @@ export function inputDialog(screen: blessed.Widgets.Screen, readClipboard: () =>
       content += (selected || caret ? "\x1b[7m" : "") + character + (selected || caret ? "\x1b[27m" : "");
       column += Number(input.strWidth(character));
     }
-    input.setContent(content);
+    input.setContent(choices ? choices.map((item, index) => `${index === choice ? "\x1b[44;37;1m" : "\x1b[40;36m"} ${item.label} \x1b[0m`).join("  ") : content);
     for (const button of [okay, cancel]) {
       button.style.bg = screen.focused === button ? "blue" : "black";
       button.style.fg = screen.focused === button ? "white" : "cyan";
@@ -63,13 +65,17 @@ export function inputDialog(screen: blessed.Widgets.Screen, readClipboard: () =>
     if (key.sequence === "\x1b[201~") { const value = bracketed; bracketed = undefined; if (value !== undefined) insert(value); return; }
     if (bracketed !== undefined) { if (key.name !== "return") bracketed += character || key.sequence || ""; return; }
     if (key.name === "escape") { finish(); return; }
-    if (key.name === "enter") { finish(screen.focused === cancel ? undefined : text.join("")); return; }
+    if (key.name === "enter") { finish(screen.focused === cancel ? undefined : choices ? choices[choice].value : text.join("")); return; }
     if (key.name === "tab") {
       const controls = [input, okay, cancel];
       controls[(controls.indexOf(screen.focused as typeof input) + (key.shift ? 2 : 1)) % 3].focus(); render(); return;
     }
     if (screen.focused !== input) {
       if (key.name === "left" || key.name === "right") { (screen.focused === okay ? cancel : okay).focus(); render(); }
+      return;
+    }
+    if (choices) {
+      if (key.name === "left" || key.name === "right") { choice = (choice + (key.name === "left" ? choices.length - 1 : 1)) % choices.length; render(); }
       return;
     }
     if (key.ctrl && key.name === "v" || key.shift && key.name === "insert") { void paste(); return; }
@@ -110,8 +116,19 @@ export function inputDialog(screen: blessed.Widgets.Screen, readClipboard: () =>
     if (character && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f]/.test(character)) insert(character);
   }
   for (const control of [input, okay, cancel]) { control.on("keypress", keypress); control.on("focus", render); }
-  okay.on("press", () => finish(text.join(""))); cancel.on("press", () => finish());
+  okay.on("press", () => finish(choices ? choices[choice].value : text.join(""))); cancel.on("press", () => finish());
   input.on("mousedown", (data: blessed.Widgets.Events.IMouseEventArg & { button?: string }) => {
+    if (choices) {
+      if (data.button !== "left") return;
+      input.focus(); let position = 0;
+      const target = data.x - (input.lpos?.xi || 0);
+      for (let i = 0; i < choices.length; i++) {
+        const length = Number(input.strWidth(choices[i].label)) + 2;
+        if (target >= position && target < position + length) choice = i;
+        position += length + 2;
+      }
+      render(); return;
+    }
     if (data.button === "right") { void paste(); return; }
     input.focus();
     let column = 0; cursor = offset;
@@ -119,10 +136,12 @@ export function inputDialog(screen: blessed.Widgets.Screen, readClipboard: () =>
     while (cursor < text.length && column < target) column += Number(input.strWidth(text[cursor++]));
     anchor = undefined; render();
   });
-  return { box, ask(title: string, initial: string, callback: (answer?: string) => void) {
+  function open(title: string, initial: string, callback: (answer?: string) => void, options?: { label: string; value: string }[]) {
     if (box.visible) return;
     previous = screen.focused; done = callback; text = Array.from(initial); cursor = text.length; offset = 0; anchor = undefined;
-    label.setContent(title); hint.setContent("← → move · Ctrl+A select all · Ctrl+V paste · Tab options");
+    choices = options; choice = 0;
+    label.setContent(title); hint.setContent(options ? "← → choose · Enter confirm · Tab options · Esc cancel" : "← → move · Ctrl+A select all · Ctrl+V paste · Tab options");
     box.show(); box.setFront(); screen.grabKeys = true; screen.program.write("\x1b[?2004h"); input.focus(); render();
-  } };
+  }
+  return { box, ask: open, choose(title: string, options: { label: string; value: string }[], callback: (answer?: string) => void) { open(title, "", callback, options); } };
 }

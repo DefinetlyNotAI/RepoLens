@@ -30,7 +30,7 @@ def parser():
         elif name == "trends":
             command.add_argument("--revisions", nargs="*", help="Analyze these revisions in order; otherwise list cached snapshots")
         elif name == "export":
-            command.add_argument("--format", choices=["json", "graphml", "mermaid"], default="json")
+            command.add_argument("--format", choices=["json", "json-folder", "graphml", "mermaid"], default="json")
             command.add_argument("--level", choices=["repository", "directory", "module", "class", "function"], default="module")
             command.add_argument("--output")
         elif name == "readme":
@@ -38,7 +38,7 @@ def parser():
         elif name == "source":
             command.add_argument("--path", required=True)
             command.add_argument("--line", type=int, default=1)
-            command.add_argument("--count", type=int, default=40)
+            command.add_argument("--count", type=int, help="Return this many lines; omitted reads all remaining source")
             command.add_argument("--highlight", action="store_true", help="Return raw source lines and syntax-color spans")
         elif name == "history":
             command.add_argument("--offset", type=int, default=0, help="Skip commits already displayed")
@@ -63,7 +63,7 @@ def print_summary(report):
     print(f"{summary['module_edges']} module edges / {summary['cycles']} circular components / {summary['warnings']} warnings")
     print(f"Coverage: {summary['coverage']}")
     print(f"Incremental: {report['incremental']['analyzed']} analyzed / {report['incremental']['cached']} cached")
-    for finding in report["findings"][:20]:
+    for finding in report["findings"]:
         print(f"  {finding['severity'].upper()} {finding['path']}:{finding['line']} {finding['message']} [{finding['confidence']}]")
     print("Run scan --json or launch tui for full evidence, diagnostics, and coverage boundaries.")
 
@@ -73,8 +73,8 @@ def main():
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     args = parser().parse_args()
     try:
-        if args.history_limit < 1 or args.history_limit > 10000:
-            raise ValueError("History limit must be between 1 and 10000")
+        if args.history_limit < 1:
+            raise ValueError("History window must be positive")
         options = scan_args(args)
         if args.command == "tui":
             entry = Path(__file__).resolve().parent.parent / "tui" / "dist" / "index.js"
@@ -88,8 +88,8 @@ def main():
                 command.extend(["--cache", str(Path(args.cache).resolve())])
             raise SystemExit(subprocess.call(command, env=env))
         if args.command == "source":
-            if args.line < 1 or not 1 <= args.count <= 500:
-                raise ValueError("Source line must be positive; count must be between 1 and 500")
+            if args.line < 1 or args.count is not None and args.count < 1:
+                raise ValueError("Source line and optional count must be positive")
             result = source(args.root, args.path, args.revision, args.line, args.count, args.highlight)
         elif args.command == "history":
             if args.offset < 0:

@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 
 
-ENGINE_VERSION = "9"
+ENGINE_VERSION = "10"
 
 
 class Cache:

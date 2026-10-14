@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "repolens"
+version = "0.1.0"
+description = "Local, syntax-aware multilingual repository intelligence"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["tree-sitter==0.25.2", "tree-sitter-language-pack==0.10.0", "networkx>=3.4,<4"]
+
+[project.scripts]
+repolens = "repolens.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["repolens*"]

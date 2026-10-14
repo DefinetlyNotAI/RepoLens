@@ -1,0 +1,9 @@
+{
+  "name": "repolens-tui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"build": "tsc", "start": "node dist/index.js", "check": "tsc --noEmit"},
+  "dependencies": {"blessed": "^0.1.81"},
+  "devDependencies": {"@types/blessed": "^0.1.27", "@types/node": "^22.0.0", "typescript": "^5.9.0"}
+}

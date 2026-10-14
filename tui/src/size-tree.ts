@@ -20,18 +20,23 @@ export function sizeTree(parent: blessed.Widgets.BoxElement, rootName: string,
   function rebuild() {
     if (!current) return;
     rows = []; base = 0; left = 0; selected = 0; hovered = undefined;
+    const cells: { node: SizeNode; name: string; count: string; share: string }[] = [];
     const visit = (node: SizeNode, prefix: string, connector: string) => {
       const directory = node.children.length > 0;
       const name = node.path.split("/").at(-1) || rootName;
       const shade = directory ? 67 : fileColors[name.split(".").at(-1) || ""] || 146;
       const share = current.lines ? 100 * node.lines / current.lines : 0;
-      rows.push({ node, text: `${tint(prefix + connector, 244)}${tint(directory ? "● " : "· ", shade)}${tint(name, shade)}  ${tint(node.lines.toLocaleString(), 65)} ${tint("lines", 244)}  ${tint(share.toFixed(1) + "%", 179)}` });
+      cells.push({ node, name: `${tint(prefix + connector, 244)}${tint(directory ? "● " : "· ", shade)}${tint(name, shade)}`, count: tint(node.lines.toLocaleString(), 65), share: tint(share.toFixed(1) + "%", 179) });
       node.children.forEach((child, index) => {
         const last = index === node.children.length - 1;
         visit(child, prefix + (connector ? connector.startsWith("└") ? "   " : "│  " : ""), last ? "└─ " : "├─ ");
       });
     };
-    visit(current, "", ""); extent = rows.reduce((maximum, row) => Math.max(maximum, strWidth(row.text)), 0); render();
+    visit(current, "", "");
+    const nameWidth = cells.reduce((maximum, row) => Math.max(maximum, strWidth(row.name)), 0);
+    const countWidth = cells.reduce((maximum, row) => Math.max(maximum, strWidth(row.count)), 0);
+    rows = cells.map(row => ({ node: row.node, text: row.name + " ".repeat(nameWidth - strWidth(row.name) + 2) + row.count + " ".repeat(countWidth - strWidth(row.count) + 2) + tint("lines", 244) + "  " + row.share }));
+    extent = rows.reduce((maximum, row) => Math.max(maximum, strWidth(row.text)), 0); render();
   }
   function clipped(text: string) {
     let column = 0, output = "", style = "", started = false;

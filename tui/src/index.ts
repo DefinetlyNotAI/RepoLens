@@ -54,10 +54,10 @@ const screen = blessed.screen({ smartCSR: true, title: "RepoLens", fullUnicode: 
 const header = blessed.box({ parent: screen, top: 0, left: 1, height: 1, right: 1, wrap: false, style: { fg: "white" } });
 const navigation = blessed.box({ parent: screen, top: 1, height: 1, left: 1, right: 1 });
 const statusLine = blessed.box({ parent: screen, top: 2, height: 1, left: 1, right: 1, wrap: false, style: { fg: "gray" } });
-const list = blessed.list({ parent: screen, top: 3, bottom: 2, left: 0, width: "42%", keys: false, vi: false,
+const list = blessed.list({ parent: screen, top: 3, bottom: 1, left: 0, width: "42%", keys: false, vi: false,
   mouse: true, border: "line", label: " Explorer ", wrap: false, padding: { bottom: 1, right: 1 },
   style: { fg: "white", border: { fg: "gray" }, selected: { bg: "blue", fg: "white", bold: true } } });
-const detailFrame = blessed.box({ parent: screen, top: 3, bottom: 2, left: "42%", width: "58%", border: "line",
+const detailFrame = blessed.box({ parent: screen, top: 3, bottom: 1, left: "42%", width: "58%", border: "line",
   style: { border: { fg: "gray" } } });
 const itemHeader = blessed.box({ parent: detailFrame, top: 0, left: 1, right: 1, height: 2, wrap: false });
 const sectionBar = blessed.box({ parent: detailFrame, top: 2, left: 1, right: 1, height: 1 });
@@ -66,12 +66,12 @@ const detail = blessed.box({ parent: detailFrame, top: 4, bottom: 1, left: 0, ri
   padding: { left: 1, right: 1 }, style: { fg: "white", scrollbar: { fg: "gray" } } });
 const gutter = blessed.box({ parent: detailFrame, top: 4, bottom: 1, left: 1, width: 6, wrap: false, style: { fg: "gray" }, hidden: true });
 const detailBar = blessed.box({ parent: detailFrame, bottom: 0, left: 1, right: 1, height: 1, mouse: true, style: { fg: "gray" } });
-const listBar = blessed.box({ parent: screen, bottom: 3, left: 1, width: "40%", height: 1, mouse: true, style: { fg: "gray" } });
+const listBar = blessed.box({ parent: screen, bottom: 2, left: 1, width: "40%", height: 1, mouse: true, style: { fg: "gray" } });
 const listVertical = blessed.box({ parent: list, top: 0, bottom: 1, right: 0, width: 1, mouse: true });
 const detailVertical = blessed.box({ parent: detailFrame, top: 4, bottom: 1, right: 0, width: 1, mouse: true });
 const detailGeometry = detail as typeof detail & { iright: number; ibottom: number };
 const listItems = list as typeof list & { items: blessed.Widgets.BoxElement[]; enterSelected(): void };
-const footer = blessed.box({ parent: screen, bottom: 0, left: 1, right: 1, height: 2, wrap: false, style: { fg: "gray" } });
+const footer = blessed.box({ parent: screen, bottom: 0, left: 1, right: 1, height: 1, wrap: false, style: { fg: "gray" } });
 const dialog = inputDialog(screen, readClipboard, clipboard);
 const prompt = dialog.box;
 const chart = sizeTree(detailFrame, basename(root), (path, lines, files) => {
@@ -231,23 +231,33 @@ function renderHeader(): void {
   });
   statusLine.style.fg = status.startsWith("Error") ? "red" : "gray";
   statusLine.setContent(clip(status, available));
-  footer.setContent("Drag bars · ← → pan · drag + wheel select · Ctrl+C copy · Ctrl+click link\n/ search · f filter · s sort · [ ] tabs · ? commands · q quit");
+  footer.setContent("q quit · ? commands");
   screen.render();
 }
 
 function overview(index = 0): string {
   if (!report) return "Analysis is running. Progress appears above.";
   const summary = report.summary;
-  if (index === 1) return Object.entries(summary.languages as Record<string, number>).sort((a, b) => b[1] - a[1])
-    .map(([language, count]) => `${color(language.padEnd(18), "6897bb")} ${accent(String(count).padStart(6))} ${gray("files")}`).join("\n");
+  if (index === 1) return alignRows(Object.entries(summary.languages as Record<string, number>).sort((a, b) => b[1] - a[1])
+    .map(([language, count]) => [color(language, "6897bb"), accent(count), gray("files")])).join("\n");
   const ranking = [...report.files].sort((a, b) => Number(b.metrics.hotspot) - Number(a.metrics.hotspot));
-  if (index === 2) return ranking.filter(f => Number(f.metrics.hotspot) > 0).map(f =>
-    `${accent(f.metrics.hotspot)}  ${clean(f.path)}\n${gray(`    ${f.churn.commits} commits · complexity ${f.metrics.cyclomatic || 0}`)}`).join("\n\n") || "No churn hotspots in the selected history window.";
-  if (index === 3) return report.dependencies.map(d => `${accent(d.name)} ${clean(d.version)}\n${gray(`${d.ecosystem} · ${d.path}`)}`).join("\n\n") || "No declared dependencies found.";
-  if (index === 4) return [pairs(Object.entries(summary.coverage as Record<string, number>)), "",
+  if (index === 2) {
+    const hotspots = ranking.filter(f => Number(f.metrics.hotspot) > 0);
+    return alignRows(hotspots.map(f => [accent(f.metrics.hotspot), clean(f.path)]))
+      .map((line, i) => `${line}\n${gray(`    ${hotspots[i].churn.commits} commits · complexity ${hotspots[i].metrics.cyclomatic || 0}`)}`).join("\n\n") || "No churn hotspots in the selected history window.";
+  }
+  if (index === 3) {
+    const dependencies = report.dependencies;
+    return alignRows(dependencies.map(d => [accent(d.name), clean(d.version)]))
+      .map((line, i) => `${line}\n${gray(`${dependencies[i].ecosystem} · ${dependencies[i].path}`)}`).join("\n\n") || "No declared dependencies found.";
+  }
+  if (index === 4) {
+    const coverage = report.files.filter(f => f.status === "partial" || (f.status === "unsupported" && f.category === "source"));
+    return [pairs(Object.entries(summary.coverage as Record<string, number>)), "",
     gray("Grammar recovery is partial parser coverage, not a confirmed compiler error."), "",
-    ...report.files.filter(f => f.status === "partial" || (f.status === "unsupported" && f.category === "source"))
-      .map(f => `${warning(f.status)}  ${clean(f.path)}\n${gray(f.language + " · " + (f.recovery_lines?.length ? `${f.recovery_lines.length} recovery locations · lines ${f.recovery_lines.slice(0, 8).join(", ")}${f.recovery_lines.length > 8 ? ", …" : ""}` : "metadata only"))}`)].join("\n\n");
+    ...alignRows(coverage.map(f => [warning(f.status), clean(f.path)]))
+      .map((line, i) => { const f = coverage[i]; return `${line}\n${gray(f.language + " · " + (f.recovery_lines?.length ? `${f.recovery_lines.length} recovery locations · lines ${f.recovery_lines.slice(0, 8).join(", ")}${f.recovery_lines.length > 8 ? ", …" : ""}` : "metadata only"))}`; })].join("\n\n");
+  }
   if (index === 5) return report.diagnostics.map(warning).join("\n\n") || gray("No repository scan diagnostics.");
   if (index === 6) return report.limitations.map(gray).join("\n\n");
   return [pairs([["Files", summary.files], ["Source files", summary.source_files], ["Lines", summary.lines],
@@ -257,19 +267,25 @@ function overview(index = 0): string {
 }
 
 function pairs(entries: [string, unknown][]): string {
-  return entries.filter(([, value]) => value !== null && value !== undefined).map(([name, value]) =>
-    `${gray(name.padEnd(21))} ${typeof value === "number" ? accent(value.toLocaleString("en-US")) : color(value, "a9b7c6")}`).join("\n");
+  return alignRows(entries.filter(([, value]) => value !== null && value !== undefined).map(([name, value]) =>
+    [gray(name), typeof value === "number" ? accent(value.toLocaleString("en-US")) : color(value, "a9b7c6")])).join("\n");
+}
+
+function alignRows(entries: string[][]): string[] {
+  const widths: number[] = [];
+  for (const row of entries) row.forEach((cell, index) => { widths[index] = Math.max(widths[index] || 0, displayWidth(cell)); });
+  return entries.map(row => row.map((cell, index) => cell + (index < row.length - 1 ? " ".repeat(widths[index] - displayWidth(cell) + 2) : "")).join(""));
 }
 
 function comparisonText(): string {
   const current = comparison;
   if (!current) return "Press c and enter a Git revision to compare it with the current analysis.\nPress b to analyze another commit or branch. Leave b empty for the working tree.";
   const delta = (number: number) => (number < 0 ? warning : accent)((number >= 0 ? "+" : "") + number);
-  return [accent(`BASE                                     CURRENT`),
-    `${color(current.before.revision.slice(0, 30).padEnd(41), "ffc66d")}${color(current.after.revision.slice(0, 30), "ffc66d")}`, "",
-    ...Object.keys(current.delta).map(key => `${gray(key.padEnd(22))} ${String(current.before.summary[key]).padStart(9)} → ${String(current.after.summary[key]).padStart(9)}  (${delta(current.delta[key])})`),
+  return [...alignRows([[accent("BASE"), accent("CURRENT")],
+    [color(current.before.revision, "ffc66d"), color(current.after.revision, "ffc66d")]]), "",
+    ...alignRows(Object.keys(current.delta).map(key => [gray(key), String(current.before.summary[key]), "→", String(current.after.summary[key]), `(${delta(current.delta[key])})`])),
     "", accent("ADDED FILES"), ...current.added_files.map(fileLink), "", warning("REMOVED FILES"), ...current.removed_files.map(fileLink),
-    "", accent("CHANGED FILES"), ...current.changed_files.map(f => `${fileLink(f.path)}   ${gray("complexity")} ${delta(f.complexity_delta)} · ${gray("lines")} ${delta(f.lines_delta)}`),
+    "", accent("CHANGED FILES"), ...alignRows(current.changed_files.map(f => [fileLink(f.path), gray("complexity"), delta(f.complexity_delta), gray("lines"), delta(f.lines_delta)])),
     "", accent("ADDED DEPENDENCIES"), ...current.added_edges.map(e => e.map(reference).join(" → ")),
     "", warning("REMOVED DEPENDENCIES"), ...current.removed_edges.map(e => e.map(reference).join(" → "))].join("\n");
 }
@@ -366,7 +382,7 @@ function rebuild(selectedDirectory?: string, preserveIndex?: number): void {
   if (view === 6) items = [{ label: comparison ? "Revision comparison" : "Press c to compare" }];
   if (sorted && view !== 2 && view !== 3 && view !== 5) items.sort((a, b) => Number(b.symbol?.metrics?.cyclomatic || b.file?.metrics.cyclomatic || 0) - Number(a.symbol?.metrics?.cyclomatic || a.file?.metrics.cyclomatic || 0) || a.label.localeCompare(b.label));
   rows = items;
-  renderedRows = rows.map(renderRow);
+  renderedRows = alignRows(rows.map(renderRow));
   listExtent = renderedRows.reduce((width, text) => Math.max(width, displayWidth(text)), 0);
   const selected = selectedDirectory ? Math.max(0, rows.findIndex(row => row.directory === selectedDirectory))
     : Math.min(preserveIndex || 0, Math.max(0, rows.length - 1));
@@ -391,12 +407,8 @@ function layout(): void {
   }
 }
 
-function renderRow(row: Row): string {
-  const width = Math.max(8, Number(list.width) - 4);
-  const columns = (name: string, metadata: string) => {
-    const remaining = Math.max(1, width - Number(detail.strWidth(strip(metadata))) - 1);
-    return name + " ".repeat(Math.max(1, remaining - Number(detail.strWidth(strip(name))) + 1)) + metadata;
-  };
+function renderRow(row: Row): string[] {
+  const columns = (name: string, metadata: string) => [name, metadata];
   if (row.group) {
     const severity = row.group.findings[0]?.severity;
     const paint = severity === "error" ? danger : severity === "warning" ? warning : accent;
@@ -405,17 +417,17 @@ function renderRow(row: Row): string {
   if (view === 2 && row.file) return columns(`${"  ".repeat(row.file.path.split("/").length - 1)}${accent(folderOpen("file:" + row.file.path, symbolExpanded, !!(query || filter)) ? "▾ " : "▸ ")}${fileLink(basename(row.file.path))}`, gray(`${row.symbolCount} symbols`));
   if (row.symbol) return columns(`${"  ".repeat(row.depth || 0)}${row.branch ? accent(folderOpen(row.symbol.id, symbolExpanded, !!(query || filter)) ? "▾ " : "▸ ") : "  "}${color(row.symbol.kind === "class" ? "C" : "ƒ", row.symbol.kind === "class" ? "6897bb" : "ffc66d")} ${clean(row.symbol.short_name)}`, Number(row.symbol.metrics?.cyclomatic) >= 10 ? warning(row.symbol.metrics?.cyclomatic) : gray(row.symbol.metrics?.cyclomatic ?? "—"));
   if (row.finding) return columns(`${"  ".repeat(row.depth || 0)}${row.finding.severity === "error" ? danger("!") : row.finding.severity === "warning" ? warning("!") : accent("·")} ${fileLink(row.finding.path)}:${accent(row.finding.line)}`, gray(row.finding.confidence));
-  if (row.commit) return `${color("*", "6a8759")} ${color(row.commit.revision.slice(0, 7), "ffc66d")} ${gray(row.commit.date.slice(0, 10))} ${clean(row.commit.subject)}`;
-  if (row.hit) return `${fileLink(row.file!.path)}:${accent(row.hit.line)} ${gray(row.hit.text.trim())}`;
+  if (row.commit) return [color("*", "6a8759"), color(row.commit.revision.slice(0, 7), "ffc66d"), gray(row.commit.date.slice(0, 10)), clean(row.commit.subject)];
+  if (row.hit) return [fileLink(row.file!.path) + ":" + accent(row.hit.line), gray(row.hit.text.trim())];
   if (view === 5) return columns(`${row.directory ? accent("● ") : color("· ", "6897bb")}${fileLink(basename(row.directory || row.file!.path))}`, color(row.sizeLines?.toLocaleString(), "6a8759"));
-  if (row.file && (query || filter || sorted)) return fileLink(row.file.path);
+  if (row.file && (query || filter || sorted)) return [fileLink(row.file.path)];
   if (row.directory || row.file) {
     const path = row.directory || row.file!.path;
     const indentation = "  ".repeat(path.split("/").length - 1);
     const marker = row.directory ? folderOpen("dir:" + path, expanded, view === 2 && !!(query || filter)) ? "▾ " : "▸ " : "  ";
-    return indentation + (row.directory ? accent(marker) : marker) + (row.directory ? accent(basename(path)) : color(basename(path), "a9b7c6")) + (row.directory ? "/" : "");
+    return [indentation + (row.directory ? accent(marker) : marker) + (row.directory ? accent(basename(path)) : color(basename(path), "a9b7c6")) + (row.directory ? "/" : "")];
   }
-  return accent(row.label);
+  return [accent(row.label)];
 }
 
 function setSections(title: string, subtitle: string, next: Section[]): void {
@@ -457,7 +469,8 @@ async function renderSection(): Promise<void> {
     const preview = await run<SourcePreview>("source", ["--path", section.source.path, "--highlight"]);
     if (version !== generation) return;
     sourceNumbers = preview.lines.map(line => line.number);
-    gutter.top = sections.length < 2 ? 2 : 4; gutter.show(); detail.left = 7;
+    gutter.width = String(sourceNumbers.at(-1) || 1).length + 1;
+    gutter.top = sections.length < 2 ? 2 : 4; gutter.show(); detail.left = Number(gutter.width) + 1;
     logicalLines = preview.lines.map(line => clean(line.text));
     styledLines = preview.lines.map(highlightSource);
     for (const finding of report?.findings || []) {
@@ -594,7 +607,7 @@ function setDetail(text: string): void {
 function paintGutter(): void {
   paintBar(detailVertical, detailBase, Math.max(0, visualRows.length - detailHeight()), detailHeight(), true);
   if (!sourceNumbers) return;
-  gutter.setContent(visualRows.slice(detailBase, detailBase + detailHeight()).map(row => row.banner ? " " : String(sourceNumbers![row.logical]).padStart(5)).join("\n"));
+  gutter.setContent(visualRows.slice(detailBase, detailBase + detailHeight()).map(row => row.banner ? " " : String(sourceNumbers![row.logical]).padStart(Number(gutter.width) - 1)).join("\n"));
 }
 
 function listHeight(): number { return Math.max(1, Number(list.height) - Number(list.iheight)); }
@@ -663,8 +676,9 @@ async function show(index: number): Promise<void> {
         ["Cyclomatic", f.metrics.cyclomatic || 0], ["Fan-in / fan-out", `${f.metrics.fan_in} / ${f.metrics.fan_out}`],
         ["Dependency depth", f.metrics.dependency_depth], ["Internal-call ratio", f.metrics.cohesion], ["Hotspot score", f.metrics.hotspot]]) },
       { name: "Source", text: "Loading source…", source: { path: f.path, line: row.hit?.line || 1 } },
-      { name: "Symbols", text: f.symbols.map(s => `${accent(s.line)}  ${clean(s.name)}\n${gray(s.signature)}`).join("\n\n") || "No extracted symbols.", verbatim: f.symbols.map(s => clean(s.signature)) },
-      { name: "Imports", text: f.imports.map(i => `${gray(String(i.line).padStart(5))}  ${color(i.target, "6a8759")}`).join("\n") || gray("No parsed imports.") },
+      { name: "Symbols", text: alignRows(f.symbols.map(s => [accent(s.line), clean(s.name)]))
+        .map((line, i) => `${line}\n${gray(f.symbols[i].signature)}`).join("\n\n") || "No extracted symbols.", verbatim: f.symbols.map(s => clean(s.signature)) },
+      { name: "Imports", text: alignRows(f.imports.map(i => [gray(i.line), color(i.target, "6a8759")])).join("\n") || gray("No parsed imports.") },
       { name: "Churn", text: pairs([["Commits in window", f.churn.commits], ["Lines added", f.churn.added], ["Lines removed", f.churn.removed]]) },
     ]);
   }
@@ -991,9 +1005,8 @@ async function moreHistory(): Promise<void> {
     const seen = new Set(owner.history.commits.map(commit => commit.revision));
     owner.history.commits.push(...page.commits.filter(commit => !seen.has(commit.revision)));
     historyDone = page.commits.length < 100;
-    status = `${owner.history.commits.length} commits loaded${historyDone ? " · end of history" : ""}`;
-    if (view === 4) rebuild(undefined, selectedRow);
-  } catch (error) { status = `Error loading history: ${clean(error)}`; }
+    if (view === 4) { status = `${owner.history.commits.length} commits loaded${historyDone ? " · end of history" : ""}`; rebuild(undefined, selectedRow); }
+  } catch (error) { if (view === 4) status = `Error loading history: ${clean(error)}`; }
   finally { historyLoading = false; renderHeader(); }
 }
 
@@ -1143,6 +1156,14 @@ function activateRow(): void {
 }
 
 list.removeAllListeners("select item"); list.removeAllListeners("select");
+function clearStatus(): void {
+  if (!status || busy) return;
+  status = ""; renderHeader();
+}
+screen.on("keypress", () => { if (!prompt.visible) clearStatus(); });
+screen.program.on("mouse", (data: Mouse) => {
+  if (!prompt.visible && (data.action === "mousedown" || data.action.startsWith("wheel"))) clearStatus();
+});
 for (const pane of [list, detail, chart.box]) pane.on("focus", () => {
   list.style.border.fg = screen.focused === list ? "blue" : "gray";
   detailFrame.style.border.fg = screen.focused === detail || screen.focused === chart.box ? "blue" : "gray";
@@ -1163,10 +1184,12 @@ screen.key(["tab"], () => { view === 6 ? detail.focus() : screen.focused === lis
 for (let i = 0; i < views.length; i++) screen.key(String(i + 1), () => switchView(i));
 screen.key(["left", "right", "S-left", "S-right"], (_character, key) => { if (screen.focused !== chart.box) pan(screen.focused === list ? "list" : "detail", (key.name === "left" ? -1 : 1) * (key.shift ? 10 : 1)); });
 screen.key("o", () => { if (activeFile) void openFile(activeFile); });
-screen.key(["[", "]"], (character, key) => {
+screen.on("keypress", (character, key) => {
+  if (prompt.visible || key.ctrl || key.meta || !["[", "]"].includes(character || key.full)) return;
   if (view === 5) return;
-  if (sections.length < 2) return;
-  sectionIndex = (sectionIndex + (character === "[" || key.full === "[" ? -1 : 1) + sections.length) % sections.length;
+  const direction = character === "[" || key.full === "[" ? -1 : 1;
+  if (sections.length < 2) { if (rows.length) selectRow((selectedRow + direction + rows.length) % rows.length); return; }
+  sectionIndex = (sectionIndex + direction + sections.length) % sections.length;
   void renderSection();
 });
 screen.key("v", () => { if (view === 5) return; const index = sections.findIndex(section => section.source); if (index >= 0) { sectionIndex = index; detail.focus(); void renderSection(); } });
@@ -1199,7 +1222,7 @@ screen.key("g", () => ask("Generate managed architecture section in root README.
 screen.key("?", () => { if (view === 5) switchView(0); setSections("Commands", "Mouse and keyboard", [{ name: "Help", text:
   pairs([["1–7 / click tab", "Switch view"], ["↑↓ / j k / click row", "Select item"], ["Enter", "Expand symbols/folders, inspect item"],
     ["Tab", "Focus list or detail"], ["← → / Shift+wheel", "Scroll horizontally"], ["Drag scrollbar", "Scroll vertically or horizontally"],
-    ["[ ] / click detail tab", "Choose detail section"], ["v", "Source preview"], ["Ctrl+click / double-click path", "Open local file"], ["Drag + wheel", "Select through scrollable content"],
+    ["[ ] / click detail tab", "Choose section; [ ] also move between entries with one section"], ["v", "Source preview"], ["Ctrl+click / double-click path", "Open local file"], ["Drag + wheel", "Select through scrollable content"],
     ["Ctrl+C / right-click", "Copy selected text, detail, or row"], ["Esc", "Clear selection and focus list"],
     ["/ · f · s", "Search · filter · sort"], ["Size: l / Backspace", "Root / parent directory"], ["History: End / scroll to last", "Load next 100 commits"], ["b · c · r", "Revision · comparison · rescan"],
     ["e · g", "Export JSON · managed README"], ["q", "Quit"]]) }]); detail.focus(); screen.render(); });

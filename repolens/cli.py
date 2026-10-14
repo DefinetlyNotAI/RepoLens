@@ -39,6 +39,7 @@ def parser():
             command.add_argument("--path", required=True)
             command.add_argument("--line", type=int, default=1)
             command.add_argument("--count", type=int, default=40)
+            command.add_argument("--highlight", action="store_true", help="Return raw source lines and syntax-color spans")
     return app
 
 
@@ -87,7 +88,7 @@ def main():
         if args.command == "source":
             if args.line < 1 or not 1 <= args.count <= 500:
                 raise ValueError("Source line must be positive; count must be between 1 and 500")
-            result = source(args.root, args.path, args.revision, args.line, args.count)
+            result = source(args.root, args.path, args.revision, args.line, args.count, args.highlight)
         elif args.command == "history":
             result = history(Path(args.root).resolve(), args.history_limit, args.revision)
         elif args.command == "trends":

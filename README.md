@@ -46,8 +46,12 @@ Cache and historical snapshots live at `%LOCALAPPDATA%/RepoLens/analysis.sqlite3
 | Tab | Focus list or scrollable source/detail pane |
 | [ / ] / click detail tab | Choose metrics, source, imports, calls, or churn for the selected item |
 | v | Open source preview |
-| Click / double-click row | Select / open item or expand directory |
-| Drag text, Ctrl+C / right-click | Select and copy detail text; without a selection, copy the focused detail or row |
+| Click / double-click row | Select / open file in its default application or expand directory |
+| o / double-click file:// link | Open the referenced local file |
+| ← → / Shift+← → | Pan the focused pane by 1 / 10 columns |
+| Wheel / Shift+wheel | Scroll one row / pan horizontally |
+| Drag scrollbar | Scroll vertically or horizontally |
+| Drag text, Ctrl+C / right-click | Copy detail text without source line numbers; successful copying clears highlighting |
 | Esc | Clear text selection and focus the list |
 | /, f, s | Search, filter, sort by complexity |
 | l | Cycle graph level |
@@ -57,9 +61,11 @@ Cache and historical snapshots live at `%LOCALAPPDATA%/RepoLens/analysis.sqlite3
 
 Filters accept language, category, parser status, symbol kind, finding type, severity, or confidence depending on the view. Graphs support repository, directory, module, class, and function views; resolved relationships can be followed interactively. The comparison view shows base/current totals, changed files, and added/removed dependency edges.
 
+Source previews use Tree-sitter syntax colors inspired by Darcula, a separate line-number gutter, and horizontal scrolling. Without a text selection, copying uses the focused detail or row. File references use `file://` URLs; double-clicking opens the local file through its operating-system association.
+
 ## Coverage and interpretation
 
-Built-in grammar selection covers Python, JavaScript/JSX, TypeScript/TSX, Java, Go, Rust, C/C++, C#, Ruby, PHP, Swift, Kotlin, Bash, PowerShell, Lua, Scala, Elixir, Dart, R, SQL, HTML, CSS/SCSS, Vue, JSON, YAML, and TOML. Additional suffixes can select grammars through `--language`; extraction quality depends on grammar node conventions. Unsupported files receive metadata without invented symbol facts. Syntax recovery reports partial coverage and source locations.
+Built-in grammar selection covers Python, JavaScript/JSX, TypeScript/TSX, Java, Go, Rust, C/C++, C#, Ruby, PHP, Swift, Kotlin, Bash, PowerShell, Lua, Scala, Elixir, Dart, R, SQL, HTML, CSS/SCSS, Vue, JSON, YAML, and TOML. Additional suffixes can select grammars through `--language`; extraction quality depends on grammar node conventions. Unsupported files receive metadata without invented symbol facts. Grammar recovery is summarized per file with source locations; it reports partial coverage rather than a confirmed compiler error.
 
 Symbol and call extraction uses grammar nodes, not textual function-name searches. Import resolution supports relative paths, common index/package conventions, Python modules, C includes, Rust paths, Java file paths, Go module paths, local npm workspaces, and explicitly configured TypeScript path aliases. External dependencies and unresolved aliases remain explicitly unresolved. Manifest inventory supports npm, Python project/requirements/Poetry, Cargo, Go, and Maven declarations; it is not a lockfile audit or vulnerability scanner.
 

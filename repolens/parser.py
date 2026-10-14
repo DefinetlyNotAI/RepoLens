@@ -159,7 +159,7 @@ def analyze_file(path, data, overrides=None):
     category = "config" if suffix in CONFIG_SUFFIXES or PurePosixPath(path).name in CONFIG_NAMES else "source" if language else "other"
     result = {"path": path, "language": language or "unknown", "category": category,
               "bytes": len(data), "lines": len(data.splitlines()), "hash": sha256(data).hexdigest(),
-              "symbols": [], "imports": [], "references": [], "namespaces": [], "unreachable": [], "diagnostics": [], "status": "unsupported"}
+              "symbols": [], "imports": [], "references": [], "namespaces": [], "unreachable": [], "diagnostics": [], "recovery_lines": [], "status": "unsupported"}
     if not language:
         result["diagnostics"].append("No grammar selected; only file metadata is available.")
         return result
@@ -171,8 +171,16 @@ def analyze_file(path, data, overrides=None):
         return result
     result["status"] = "partial" if root.has_error else "parsed"
     if root.has_error:
-        errors = [n for n in walk(root) if n.type == "ERROR" or n.is_missing]
-        result["diagnostics"].extend(f"Syntax recovery at line {n.start_point.row + 1}: {n.type}" for n in errors[:20])
+        errors = []
+        pending = [root]
+        while pending:
+            node = pending.pop()
+            if node.type == "ERROR" or node.is_missing:
+                errors.append(node)
+            else:
+                pending.extend(node.children)
+        result["recovery_lines"] = sorted({n.start_point.row + 1 for n in errors})
+        result["diagnostics"].append(f"{language} grammar recovered at {len(result['recovery_lines'])} source locations. This does not confirm a compiler error.")
     symbols_by_node = {}
     for node in walk(root):
         if language == "csharp" and node.type in {"namespace_declaration", "file_scoped_namespace_declaration"}:
@@ -244,3 +252,52 @@ def analyze_file(path, data, overrides=None):
     result["metrics"] = {"functions": counts["function"], "classes": counts["class"],
                          "cyclomatic": sum(s.get("metrics", {}).get("cyclomatic", 0) for s in result["symbols"])}
     return result
+
+
+def highlight_lines(path, data, start=1, count=100):
+    lines = data.decode("utf-8", "replace").splitlines()
+    byte_lines = data.splitlines()
+    preview = [{"number": i + 1, "text": line, "spans": []} for i, line in enumerate(lines)
+               if start - 1 <= i < start - 1 + count]
+    by_line = {line["number"] - 1: line for line in preview}
+    language = LANGUAGES.get(PurePosixPath(path).suffix.lower())
+    if not language:
+        return {"path": path, "lines": preview, "language": "unknown"}
+    try:
+        tree = get_parser(language).parse(data)
+    except (LookupError, ValueError, RuntimeError):
+        return {"path": path, "lines": preview, "language": language}
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        if node.end_point.row < start - 1 or node.start_point.row >= start - 1 + count:
+            continue
+        kind = None
+        if "comment" in node.type:
+            kind = "comment"
+        elif node.type in {"string", "string_literal", "template_string", "raw_string_literal", "interpreted_string_literal", "char_literal", "character_literal"}:
+            kind = "string"
+        elif not node.children:
+            if any(part in node.type for part in ("integer", "float", "number", "decimal")):
+                kind = "number"
+            elif node.type in IDENTIFIERS:
+                parent = node.parent
+                if parent and parent.type in FUNCTIONS | CLASSES and field(parent, "name") == node:
+                    kind = "declaration"
+                elif node.type in {"type_identifier", "property_identifier", "field_identifier"}:
+                    kind = "property"
+            elif not node.is_named and value(node, data).replace("_", "").isalpha():
+                kind = "keyword"
+        if kind:
+            for row in range(max(node.start_point.row, start - 1), min(node.end_point.row + 1, start - 1 + count)):
+                if row not in by_line or row >= len(byte_lines):
+                    continue
+                first = node.start_point.column if row == node.start_point.row else 0
+                last = node.end_point.column if row == node.end_point.row else len(byte_lines[row])
+                left = len(byte_lines[row][:first].decode("utf-8", "replace"))
+                right = len(byte_lines[row][:last].decode("utf-8", "replace"))
+                if right > left:
+                    by_line[row]["spans"].append({"start": left, "end": right, "kind": kind})
+        else:
+            stack.extend(reversed(node.children))
+    return {"path": path, "lines": preview, "language": language}

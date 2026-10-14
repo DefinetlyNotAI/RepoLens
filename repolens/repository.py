@@ -151,7 +151,7 @@ def history(root, limit=100, revision=None):
             "diagnostics": ["Churn covers the selected commit window; rename-only paths are omitted."]}
 
 
-def source(root, path, revision=None, start=1, count=40):
+def source(root, path, revision=None, start=1, count=40, highlight=False):
     root = Path(root).resolve()
     target = (root / path).resolve()
     if not target.is_relative_to(root):
@@ -160,5 +160,8 @@ def source(root, path, revision=None, start=1, count=40):
     data = git(root, "show", f"{resolve_revision(root, revision)}:{git_prefix(root)}{relative}", binary=True) if revision else target.read_bytes()
     if len(data) > MAX_BYTES:
         raise ValueError("Source exceeds the 2 MiB preview limit")
+    if highlight:
+        from .parser import highlight_lines
+        return highlight_lines(relative, data, start, count)
     lines = data.decode("utf-8", "replace").splitlines()
     return "\n".join(f"{i + 1:5}  {line}" for i, line in enumerate(lines) if start - 1 <= i < start - 1 + count)

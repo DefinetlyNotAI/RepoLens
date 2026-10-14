@@ -330,8 +330,15 @@ def build_report(root, revision, files, dependencies, diagnostics, history_limit
         metrics["cohesion_basis"] = "fraction of resolved calls staying inside the module"
         metrics["complexity_per_100_lines"] = round(100 * file.get("metrics", {}).get("cyclomatic", 0) / max(file["lines"], 1), 2)
         file.setdefault("metrics", {}).update(metrics)
-        for diagnostic in file["diagnostics"]:
-            if file["category"] == "source" or file["status"] == "partial":
+        if file["status"] == "partial":
+            recovery = file.get("recovery_lines", [])
+            findings.append({"type": "coverage", "severity": "info", "confidence": "high", "path": file["path"],
+                             "line": recovery[0] if recovery else 1, "message": f"Partial {file['language']} grammar coverage ({len(recovery)} recovery locations).",
+                             "evidence": [*file["diagnostics"], "Recovery lines: " + ", ".join(map(str, recovery))]})
+        else:
+            for diagnostic in file["diagnostics"]:
+                if file["category"] != "source":
+                    continue
                 findings.append({"type": "coverage", "severity": "info", "confidence": "high", "path": file["path"], "line": 1,
                                  "message": diagnostic, "evidence": [file["status"]]})
         for statement in file.get("unreachable", []):

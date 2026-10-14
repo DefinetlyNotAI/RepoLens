@@ -40,10 +40,15 @@ Cache and historical snapshots live at `%LOCALAPPDATA%/RepoLens/analysis.sqlite3
 
 | Key | Action |
 | --- | --- |
-| 1–7 | Overview, files, symbols, findings, history, graph, comparison |
+| 1–7 / click tab | Overview, files, symbols, findings, history, graph, comparison |
 | ↑↓ / j k | Navigate |
 | Enter | Expand directory, drill into file symbols, compare commit, follow graph edge |
 | Tab | Focus list or scrollable source/detail pane |
+| [ / ] / click detail tab | Choose metrics, source, imports, calls, or churn for the selected item |
+| v | Open source preview |
+| Click / double-click row | Select / open item or expand directory |
+| Drag text, Ctrl+C / right-click | Select and copy detail text; without a selection, copy the focused detail or row |
+| Esc | Clear text selection and focus the list |
 | /, f, s | Search, filter, sort by complexity |
 | l | Cycle graph level |
 | b, c, r | Select revision, compare revision, incremental rescan |

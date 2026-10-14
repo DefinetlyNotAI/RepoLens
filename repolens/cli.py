@@ -40,6 +40,8 @@ def parser():
             command.add_argument("--line", type=int, default=1)
             command.add_argument("--count", type=int, default=40)
             command.add_argument("--highlight", action="store_true", help="Return raw source lines and syntax-color spans")
+        elif name == "history":
+            command.add_argument("--offset", type=int, default=0, help="Skip commits already displayed")
     return app
 
 
@@ -90,7 +92,9 @@ def main():
                 raise ValueError("Source line must be positive; count must be between 1 and 500")
             result = source(args.root, args.path, args.revision, args.line, args.count, args.highlight)
         elif args.command == "history":
-            result = history(Path(args.root).resolve(), args.history_limit, args.revision)
+            if args.offset < 0:
+                raise ValueError("History offset must be non-negative")
+            result = history(Path(args.root).resolve(), args.history_limit, args.revision, args.offset)
         elif args.command == "trends":
             if args.revisions:
                 result = [{"revision": report["revision"], "summary": report["summary"]}

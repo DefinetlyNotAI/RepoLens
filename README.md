@@ -40,28 +40,31 @@ Cache and historical snapshots live at `%LOCALAPPDATA%/RepoLens/analysis.sqlite3
 
 | Key | Action |
 | --- | --- |
-| 1–7 / click tab | Overview, files, symbols, findings, history, graph, comparison |
+| 1–7 / click tab | Overview, files, symbols, findings, history, size chart, comparison |
 | ↑↓ / j k | Navigate |
-| Enter | Expand directory, drill into file symbols, compare commit, follow graph edge |
+| Enter | Expand directory or symbol, drill into file symbols, compare commit |
 | Tab | Focus list or scrollable source/detail pane |
 | [ / ] / click detail tab | Choose metrics, source, imports, calls, or churn for the selected item |
 | v | Open source preview |
 | Click / double-click row | Select / open file in its default application or expand directory |
-| o / double-click file:// link | Open the referenced local file |
+| o / Ctrl+click or double-click path | Open the referenced local file; findings rows do not open files |
 | ← → / Shift+← → | Pan the focused pane by 1 / 10 columns |
 | Wheel / Shift+wheel | Scroll one row / pan horizontally |
 | Drag scrollbar | Scroll vertically or horizontally |
-| Drag text, Ctrl+C / right-click | Copy detail text without source line numbers; successful copying clears highlighting |
+| Drag text + wheel, Ctrl+C / right-click | Select through scrolling and copy detail text without source line numbers; successful copying clears highlighting |
 | Esc | Clear text selection and focus the list |
 | /, f, s | Search, filter, sort by complexity |
-| l | Cycle graph level |
+| l / Backspace in Size | Return to repository root / parent directory |
+| End / reach last history row | Load the next page of 100 commits |
 | b, c, r | Select revision, compare revision, incremental rescan |
 | e, g | Export JSON, generate managed README section |
 | ?, q | Help, exit |
 
-Filters accept language, category, parser status, symbol kind, finding type, severity, or confidence depending on the view. Graphs support repository, directory, module, class, and function views; resolved relationships can be followed interactively. The comparison view shows base/current totals, changed files, and added/removed dependency edges.
+Filters accept language, category, parser status, symbol kind, finding type, severity, or confidence depending on the view. When `rg` is installed, working-tree searches include source text (up to 200 matches); historical searches use analyzed names and paths. The Size view is a hoverable sunburst: the core is the selected directory, rings follow directory levels, and angular size follows line counts. Click a directory segment to explore it or its core to go up. Symbols nest under their extracted owners, including anonymous callbacks. The comparison view shows base/current totals, changed files, and added/removed dependency edges. Graph exports remain available through the CLI.
 
-Source previews use Tree-sitter syntax colors inspired by Darcula, a separate line-number gutter, and horizontal scrolling. Without a text selection, copying uses the focused detail or row. File references use `file://` URLs; double-clicking opens the local file through its operating-system association.
+Source previews use Tree-sitter syntax categories with Darcula colors, including CSS selectors/properties, JSX tags, and [PyCharm-specific token colors](https://github.com/JetBrains/intellij-community/blob/master/python/pluginResources/colorSchemes/PythonDarcula.xml). IDE semantic analysis and terminal color support can produce different results. Source warnings/errors have colored underlines and banners; grammar recovery remains a partial-coverage notice. Code and paths scroll horizontally, while prose wraps. File references display relative paths, underline on hover, and open through the operating-system association. Without a text selection, copying uses the focused detail or row. The focused pane has a blue border; list rendering is limited to visible rows.
+
+All input dialogs support Enter/Okay, Escape/Cancel, Tab between options, mouse caret placement, arrow/Home/End navigation, Shift selection, Ctrl+A/C/X/V, right-click paste, and bracketed terminal paste.
 
 ## Coverage and interpretation
 

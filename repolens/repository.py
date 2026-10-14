@@ -109,18 +109,20 @@ def discover(root, revision=None, includes=()):
     yield None, None, diagnostics
 
 
-def history(root, limit=100, revision=None):
+def history(root, limit=100, revision=None, offset=0):
     if not is_git(root):
         return {"commits": [], "branches": [], "churn": {}, "diagnostics": ["No Git repository."]}
     try:
         head = resolve_revision(root, revision or "HEAD")
     except ValueError:
         return {"commits": [], "branches": [], "churn": {}, "diagnostics": ["No commits available."]}
-    log = git(root, "log", f"-{limit}", "--format=%H%x09%aI%x09%s", head)
+    log = git(root, "log", f"-{limit}", f"--skip={offset}", "--format=%H%x09%aI%x09%s", head)
     commits = []
     for line in log.splitlines():
         commit, date, subject = line.split("\t", 2)
         commits.append({"revision": commit, "date": date, "subject": subject})
+    if offset:
+        return {"commits": commits, "branches": [], "churn": {}, "diagnostics": []}
     raw = git(root, "log", f"-{limit}", "--format=COMMIT:%H", "--numstat", "-z", head, binary=True)
     prefix = git_prefix(root)
     churn = {}
